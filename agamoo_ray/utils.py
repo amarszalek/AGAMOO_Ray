@@ -1,0 +1,81 @@
+import numpy as np
+
+
+CEXT = False
+try:
+    import agamoo.cutils as cutils
+    CEXT = True
+except Exception as e:
+    print('C extension not available')
+    print(e)
+    CEXT = False
+
+
+def pairwise_dominance(x):
+    z = x[:, np.newaxis] >= x #org
+    z = np.all(z, axis=2)
+    z[range(z.shape[0]), range(z.shape[0])] = False
+    #z[np.triu_indices(z.shape[0])] = False
+    xx = np.any(z, axis=1)
+    return np.logical_not(xx)
+
+
+def get_not_dominated(populations_eval):
+    if CEXT:
+        mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
+        cutils.cget_not_dominated(populations_eval, mask)
+        mask = mask.astype(bool)
+    else:
+        mask = pairwise_dominance(populations_eval)
+    return mask
+
+
+def pairwise_distance(x):
+    return np.linalg.norm(x[:, None, :] - x[None, :, :], axis=-1)
+
+
+def front_suppression(front_eval, front_max):
+    if CEXT:
+        mask = np.zeros(front_eval.shape[0], dtype=np.int32)
+        cutils.cfront_suppression(front_eval, front_max, mask)
+        mask = mask.astype(bool)
+    else:
+        n = front_eval.shape[0] - front_max
+        ideal = np.argmin(front_eval, axis=0)
+        front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0))+1.0
+        front_eval_norm = front_eval_norm/np.max(front_eval_norm, axis=0)
+        z = pairwise_distance(front_eval_norm)
+        mask = np.ones(front_eval.shape[0], dtype=bool)
+        t = np.tril(z) + np.triu(np.ones_like(z) * 1000000)
+        arg = np.argsort(t, axis=None)
+        indx_i, indx_j = np.unravel_index(arg, t.shape)
+        while n > 0:
+            ii = indx_i[0]
+            mask[ii] = False
+            tmp = indx_i[indx_i!=ii]
+            indx_j = indx_j[indx_i!=ii]
+            indx_i = tmp.copy()
+            tmp = indx_j[indx_j!=ii]
+            indx_i = indx_i[indx_j!=ii]
+            indx_j = tmp.copy()
+            n=n-1
+        for i in ideal:
+            mask[i] = True
+    return mask
+
+
+def assigning_gens(nvars, nobjs):
+    while True:
+        if nvars <= nobjs:
+            #r = np.random.choice(range(nobjs), size=(nvars,), replace=False)
+            #r2 = np.stack([r == i for i in range(nobjs)])
+            r = np.random.choice(range(nvars), size=(nobjs,), replace=True)
+            r2 = np.stack([r == i for i in range(nvars)])
+            r2 = r2.T
+            break
+        else:
+            r = np.random.randint(0, nobjs, size=(nvars,))
+            r2 = np.stack([r == i for i in range(nobjs)])
+            if nvars >= nobjs and not np.any(np.all(r2, axis=1)) and not np.any(np.all(np.logical_not(r2), axis=1)):
+                break
+    return r2
