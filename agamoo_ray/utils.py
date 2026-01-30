@@ -3,7 +3,7 @@ import numpy as np
 
 CEXT = False
 try:
-    import agamoo.cutils as cutils
+    import agamoo_ray.cutils as cutils
     CEXT = True
 except Exception as e:
     print('C extension not available')

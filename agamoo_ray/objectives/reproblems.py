@@ -1,5 +1,5 @@
 import numpy as np
-from agamoo import Objective
+from agamoo_ray import Objective
 
 
 class RE21(Objective):

@@ -9,14 +9,14 @@ with open("requirements.txt", "r") as reqs_file:
         requirements.append(line.strip())
 
 setup(
-    name="agamoo",
+    name="agamoo_ray",
     version="0.0.1",
     author="Adam Marszałek & Paweł Jarosz",
-    author_email="amarszalek@pk.edu.pl",
-    description="Asynchronous GAme theory based framework for MultiObjective Optimization in Python",
+    author_email="adam.marszalek@pk.edu.pl",
+    description="Asynchronous GAme theory based framework for MultiObjective Optimization in Python with Ray",
     long_description=readme,
     long_description_content_type="text/markdown",
-    url="https://github.com/amarszalek/AGAMOO",
+    url="https://github.com/amarszalek/AGAMOO_Ray",
     packages=find_packages(),
     install_requires=requirements,
     classifiers=[
