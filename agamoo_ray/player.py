@@ -76,7 +76,11 @@ class Player(ABC):
         try:
             while True:
                 # Fetch Global State Snapshot
-                global_state = ray.get(self.storage.get_snapshot.remote())
+                #global_state = ray.get(self.storage.get_status_flags.remote())
+                #global_state = ray.get(self.storage.get_snapshot.remote())
+
+                snapshot_ref = ray.get(self.storage.get_snapshot_ref.remote())
+                global_state = ray.get(snapshot_ref)
 
                 if global_state['stop_flag']:
                     if self.verbose:
@@ -98,13 +102,14 @@ class Player(ABC):
                             else:
                                 pop, pop_eval, neval = self.step(pop, pop_eval, pattern)
                         except Exception as e:
-                            logger.info(f"Player {self.num} error in step(): {e}")
+                            logger.error(f"Player {self.num} error in step(): {e}", exc_info=True)
                             traceback.print_exc()
 
                     self.iteration += 1
                     self.evaluation_counter += neval
 
                     # --- Exchange Logic (Reimplemented with local snapshot) ---
+                    #global_state = ray.get(self.storage.get_snapshot.remote())
                     front = global_state['front']
                     front_eval = global_state['front_eval']
                     best = global_state['best']
@@ -206,7 +211,6 @@ class Player(ABC):
                         'iter_flag': False
                     })
                     if self.verbose:
-                        # Use print in actor, Ray captures stdout
                         logger.info(f"Player {self.num} sent pop at iter {self.iteration}")
 
                     next_iter_counter = 0
@@ -222,7 +226,7 @@ class Player(ABC):
                     time.sleep(0.001)
 
         except Exception as e:
-            logger.info(f"Player {self.num} crashed: {e}")
+            logger.error(f"Player {self.num} crashed: {e}", exc_info=True)
             traceback.print_exc()
         finally:
             if self.verbose:

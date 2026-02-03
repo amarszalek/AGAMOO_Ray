@@ -88,9 +88,6 @@ class AGAMOO:
                 # Pobierz status z aktora Storage
                 status = ray.get(self.storage.get_status.remote())
 
-                #if self.verbose:
-                #    print(f"Get status: {status}")
-
                 # Aktualizacja paska postępu
                 current_evals = status['evaluations']
                 pbar.n = min(current_evals, self.max_eval)
@@ -142,9 +139,11 @@ class GlobalStorage:
         self.players_handles = []  # Uchwyty do aktorów graczy
         self.evaluator_handle = None
         self.verbose = verbose
+        self.snapshot_ref = None
 
         # Stan wewnętrzny
         self.reset()
+        self._refresh_snapshot_ref()  # Inicjalizacja pierwszej referencji
 
     def set_players(self, players):
         """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
@@ -153,6 +152,27 @@ class GlobalStorage:
     def set_evaluator(self, evaluator):
         """Rejestruje uchwyty do procesów obliczeniowych (Ewaluatorów)."""
         self.evaluator_handle = evaluator
+
+    def _refresh_snapshot_ref(self):
+        """Metoda pomocnicza tworząca snapshot w Object Store"""
+        snapshot_data = {
+            'front': self.front,
+            'front_eval': self.front_eval,
+            'best': self.best,
+            'iter_counters': self.iter_counters,
+            'patterns': self.patterns,
+            'next_iter': self.next_iter,
+            'stop_flag': self.stop_flag
+        }
+        # ray.put zapisuje dane w pamięci (Plasma Store) i zwraca lekki identyfikator
+        self.snapshot_ref = ray.put(snapshot_data)
+
+    def get_snapshot_ref(self):
+        """
+        Zwraca TYLKO referencję (ObjectRef).
+        Ta operacja jest błyskawiczna i nie blokuje aktora na czas przesyłu danych.
+        """
+        return self.snapshot_ref
 
     def reset(self):
         """Resetuje stan do wartości początkowych przed nową optymalizacją."""
@@ -196,6 +216,23 @@ class GlobalStorage:
             'evaluations': self.total_evaluations,
             'stop_flag': self.stop_flag,
             'front_size': len(self.front)
+        }
+
+    def get_status_flags(self):
+        """Lekka metoda do szybkiego sprawdzenia synchronizacji."""
+        return {
+            'stop_flag': self.stop_flag,
+            'next_iter': self.next_iter,
+            'iter_counters': self.iter_counters,
+            'patterns': self.patterns  # To jest małe, można przesłać
+        }
+
+    def get_pareto_front(self):
+        """Ciężka metoda pobierająca dane."""
+        return {
+            'front': self.front,
+            'front_eval': self.front_eval,
+            'best': self.best
         }
 
     def get_results(self):
@@ -311,8 +348,10 @@ class GlobalStorage:
             if self.max_eval > 0 and self.total_evaluations >= self.max_eval:
                 self.stop_flag = True
 
+            self._refresh_snapshot_ref()
+
         except Exception as e:
-            print(f"GlobalStorage update error: {e}")
+            logger.error(f"GlobalStorage update error: {e}", exc_info=True)
             traceback.print_exc()
 
 
