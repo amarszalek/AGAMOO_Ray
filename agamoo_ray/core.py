@@ -27,6 +27,7 @@ class AGAMOO:
         self.evaluator = None
         self.storage = None
         self.results = None
+        self.ref_holder = None
 
         self.nobjs = 0
         self.nvars = 0
@@ -44,6 +45,9 @@ class AGAMOO:
         ray.get(self.storage.set_players.remote(players))
         ray.get(self.storage.set_evaluator.remote(evaluator))
 
+        for p in self.players:
+            p.set_infrastructure.remote(self.storage, self.ref_holder)
+
 
     def create_storage(self, nvars, nobjs, num_cpus=1):
         """
@@ -54,11 +58,13 @@ class AGAMOO:
         self.nobjs = nobjs
 
         if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
+            ray.init(ignore_reinit_error=True, include_dashboard=False)
+
+        self.ref_holder = RefHolder.remote()
 
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
-            self.max_front, self.max_front_tol, self.front_f
+            self.max_front, self.max_front_tol, self.front_f, ref_holder=self.ref_holder
         )
         return self.storage
 
@@ -127,7 +133,7 @@ class GlobalStorage:
     """
 
     def __init__(self, nvars, nobjs, max_eval, change_iter, next_iter, max_front,
-                 max_front_tol=0.0, front_f=None, verbose=False):
+                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None):
         self.nvars = nvars
         self.nobjs = nobjs
         self.max_eval = max_eval
@@ -139,11 +145,14 @@ class GlobalStorage:
         self.players_handles = []  # Uchwyty do aktorów graczy
         self.evaluator_handle = None
         self.verbose = verbose
-        self.snapshot_ref = None
+
+        self.ref_holder = ref_holder
+
+        #self.snapshot_ref = None
 
         # Stan wewnętrzny
         self.reset()
-        self._refresh_snapshot_ref()  # Inicjalizacja pierwszej referencji
+        #self._refresh_snapshot_ref()  # Inicjalizacja pierwszej referencji
 
     def set_players(self, players):
         """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
@@ -165,14 +174,18 @@ class GlobalStorage:
             'stop_flag': self.stop_flag
         }
         # ray.put zapisuje dane w pamięci (Plasma Store) i zwraca lekki identyfikator
-        self.snapshot_ref = ray.put(snapshot_data)
+        ref = ray.put(snapshot_data)
 
-    def get_snapshot_ref(self):
-        """
-        Zwraca TYLKO referencję (ObjectRef).
-        Ta operacja jest błyskawiczna i nie blokuje aktora na czas przesyłu danych.
-        """
-        return self.snapshot_ref
+        # Wysyłamy referencję do RefHoldera asynchronicznie!
+        # Nie czekamy (brak await/ray.get), po prostu wysyłamy sygnał.
+        self.ref_holder.update_ref.remote([ref])
+
+    #def get_snapshot_ref(self):
+    #    """
+    #    Zwraca TYLKO referencję (ObjectRef).
+    #    Ta operacja jest błyskawiczna i nie blokuje aktora na czas przesyłu danych.
+    #    """
+    #    return self.snapshot_ref
 
     def reset(self):
         """Resetuje stan do wartości początkowych przed nową optymalizacją."""
@@ -194,20 +207,22 @@ class GlobalStorage:
         # Inne metryki
         self.total_evaluations = 0
 
-    def get_snapshot(self):
-        """
-        Zwraca "migawkę" stanu dla graczy (Players).
-        Dzięki Ray Plasma Store, duże tablice (front) są przesyłane przez zero-copy.
-        """
-        return {
-            'front': self.front,
-            'front_eval': self.front_eval,
-            'best': self.best,
-            'iter_counters': self.iter_counters,
-            'patterns': self.patterns,
-            'next_iter': self.next_iter,
-            'stop_flag': self.stop_flag
-        }
+        self._refresh_snapshot_ref()
+
+    #def get_snapshot(self):
+    #    """
+    #    Zwraca "migawkę" stanu dla graczy (Players).
+    #    Dzięki Ray Plasma Store, duże tablice (front) są przesyłane przez zero-copy.
+    #    """
+    #    return {
+    #        'front': self.front,
+    #        'front_eval': self.front_eval,
+    #        'best': self.best,
+    #        'iter_counters': self.iter_counters,
+    #        'patterns': self.patterns,
+     #       'next_iter': self.next_iter,
+    #        'stop_flag': self.stop_flag
+    #    }
 
     def get_status(self):
         """Zwraca status dla paska postępu (Driver)."""
@@ -218,22 +233,22 @@ class GlobalStorage:
             'front_size': len(self.front)
         }
 
-    def get_status_flags(self):
-        """Lekka metoda do szybkiego sprawdzenia synchronizacji."""
-        return {
-            'stop_flag': self.stop_flag,
-            'next_iter': self.next_iter,
-            'iter_counters': self.iter_counters,
-            'patterns': self.patterns  # To jest małe, można przesłać
-        }
+    #def get_status_flags(self):
+     #   """Lekka metoda do szybkiego sprawdzenia synchronizacji."""
+     #   return {
+     #       'stop_flag': self.stop_flag,
+    #        'next_iter': self.next_iter,
+     #       'iter_counters': self.iter_counters,
+    #        'patterns': self.patterns  # To jest małe, można przesłać
+     #   }
 
-    def get_pareto_front(self):
-        """Ciężka metoda pobierająca dane."""
-        return {
-            'front': self.front,
-            'front_eval': self.front_eval,
-            'best': self.best
-        }
+    #def get_pareto_front(self):
+    #    """Ciężka metoda pobierająca dane."""
+    #    return {
+    #        'front': self.front,
+    #        'front_eval': self.front_eval,
+    #        'best': self.best
+    #   }
 
     def get_results(self):
         """Zwraca końcowe wyniki."""
@@ -353,5 +368,22 @@ class GlobalStorage:
         except Exception as e:
             logger.error(f"GlobalStorage update error: {e}", exc_info=True)
             traceback.print_exc()
+
+@ray.remote
+class RefHolder:
+    """
+    Lekki aktor służący tylko do dystrybucji referencji do aktualnego stanu.
+    Dzięki temu czytanie (Players) nie jest blokowane przez pisanie (GlobalStorage).
+    """
+    def __init__(self):
+        self.current_ref = None
+
+    def update_ref(self, ref_list):
+        """GlobalStorage wrzuca tu nową referencję."""
+        self.current_ref = ref_list[0]
+
+    def get_ref(self):
+        """Gracze pobierają stąd referencję błyskawicznie."""
+        return self.current_ref
 
 

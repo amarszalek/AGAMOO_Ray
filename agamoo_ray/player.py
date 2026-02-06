@@ -30,12 +30,19 @@ class Player(ABC):
         self.repair = DefaultRepair()
         self.init_pop = init_pop
 
+        self.ref_holder = None
+
         self.iteration = 0
         self.evaluation_counter = 0
 
     def set_repair(self, repair):
         if repair is not None:
             self.repair = repair
+
+    def set_infrastructure(self, storage, ref_holder):
+        """Metoda do wstrzykiwania zależności"""
+        self.storage = storage
+        self.ref_holder = ref_holder
 
     def start(self):
         """
@@ -79,7 +86,14 @@ class Player(ABC):
                 #global_state = ray.get(self.storage.get_status_flags.remote())
                 #global_state = ray.get(self.storage.get_snapshot.remote())
 
-                snapshot_ref = ray.get(self.storage.get_snapshot_ref.remote())
+                #snapshot_ref = ray.get(self.storage.get_snapshot_ref.remote())
+                #global_state = ray.get(snapshot_ref)
+
+                snapshot_ref = ray.get(self.ref_holder.get_ref.remote())
+                if snapshot_ref is None:
+                    time.sleep(0.01)
+                    continue
+
                 global_state = ray.get(snapshot_ref)
 
                 if global_state['stop_flag']:

@@ -22,7 +22,7 @@ objs = [obj1, obj2, obj3]
 nvar = obj1.n_var
 nobj = obj1.n_obj
 
-ray.init(log_to_driver=True)
+ray.init(log_to_driver=True, include_dashboard=False)
 
 agamoo = AGAMOO(max_eval, change_iter, next_iter, max_front, verbose=True)
 storage = agamoo.create_storage(nvar, nobj, num_cpus=1)
