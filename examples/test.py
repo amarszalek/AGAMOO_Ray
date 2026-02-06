@@ -26,8 +26,8 @@ ray.init(log_to_driver=True, include_dashboard=False)
 
 agamoo = AGAMOO(max_eval, change_iter, next_iter, max_front, verbose=True)
 storage = agamoo.create_storage(nvar, nobj, num_cpus=1)
-evaluator = Evaluator.options(num_cpus=0).remote(objs)
+evaluators = [Evaluator.options(num_cpus=0).remote(objs) for _ in range(2)]
 players = [ClonalSelection.options(num_cpus=1).remote(i, npop, player_parm, obj, storage, exchange='front_random', verbose=True) for i, obj in zip(range(nobj), objs)]
-agamoo.init_players(players, evaluator)
+agamoo.init_players(players, evaluators)
 
 agamoo.start_optimize()

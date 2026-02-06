@@ -24,10 +24,11 @@ class AGAMOO:
         self.verbose = verbose
 
         self.players = []
-        self.evaluator = None
+        self.evaluators = None
         self.storage = None
         self.results = None
         self.ref_holder = None
+        self.repair = None
 
         self.nobjs = 0
         self.nvars = 0
@@ -39,11 +40,16 @@ class AGAMOO:
         a nie instancji klas.
         """
         self.players = players
-        self.evaluator = evaluator
+
+        if isinstance(evaluator, list):
+            self.evaluators = evaluator
+        else:
+            self.evaluators = [evaluator]
+
         self.repair = repair
         # Rejestrujemy graczy w storage
         ray.get(self.storage.set_players.remote(players))
-        ray.get(self.storage.set_evaluator.remote(evaluator))
+        ray.get(self.storage.set_evaluator.remote(self.evaluators))
 
         for p in self.players:
             p.set_infrastructure.remote(self.storage, self.ref_holder)
@@ -116,10 +122,11 @@ class AGAMOO:
         if not self.storage:
             return None
 
+        ref = ray.get(self.ref_holder.get_ref.remote())
         if key:
-            # Pobranie konkretnego klucza (wymaga rozszerzenia Storage o generyczny getter
-            # lub pobrania całego słownika)
-            snapshot = ray.get(self.storage.get_snapshot.remote())
+            if ref is None:
+                return None
+            snapshot = ray.get(ref)
             return snapshot.get(key)
 
         return ray.get(self.storage.get_results.remote())
@@ -143,7 +150,8 @@ class GlobalStorage:
         self.max_front_tol = max_front_tol
         self.front_f = front_f
         self.players_handles = []  # Uchwyty do aktorów graczy
-        self.evaluator_handle = None
+        self.evaluators = []  # Lista aktorów ewaluatorów
+        self.eval_rr_index = 0  # Indeks do Round-Robin
         self.verbose = verbose
 
         self.ref_holder = ref_holder
@@ -158,9 +166,12 @@ class GlobalStorage:
         """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
         self.players_handles = players
 
-    def set_evaluator(self, evaluator):
+    def set_evaluator(self, evaluators):
         """Rejestruje uchwyty do procesów obliczeniowych (Ewaluatorów)."""
-        self.evaluator_handle = evaluator
+        if isinstance(evaluators, list):
+            self.evaluators = evaluators
+        else:
+            self.evaluators = [evaluators]
 
     def _refresh_snapshot_ref(self):
         """Metoda pomocnicza tworząca snapshot w Object Store"""
@@ -311,11 +322,23 @@ class GlobalStorage:
 
             futures = []
             target_objs = []
+
+            # Liczba dostępnych workerów
+            num_workers = len(self.evaluators)
+
             for i in range(self.nobjs):
                 if i != nobj:
+                    if num_workers > 0:
+                        evaluator = self.evaluators[self.eval_rr_index % num_workers]
+                        self.eval_rr_index += 1
+                        # Zlecenie zadania asynchronicznego
+                        futures.append(evaluator.evaluate.remote(pop, i))
+                        target_objs.append(i)
+
+
                     # Zlecamy obliczenie evaluatorowi
-                    futures.append(self.evaluator_handle.evaluate.remote(pop, i))
-                    target_objs.append(i)
+                    #futures.append(self.evaluator_handle.evaluate.remote(pop, i))
+                    #target_objs.append(i)
 
             # Czekamy na wyniki (non-blocking await w Ray)
             if futures:
