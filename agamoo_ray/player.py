@@ -83,12 +83,6 @@ class Player(ABC):
         try:
             while True:
                 # Fetch Global State Snapshot
-                #global_state = ray.get(self.storage.get_status_flags.remote())
-                #global_state = ray.get(self.storage.get_snapshot.remote())
-
-                #snapshot_ref = ray.get(self.storage.get_snapshot_ref.remote())
-                #global_state = ray.get(snapshot_ref)
-
                 snapshot_ref = ray.get(self.ref_holder.get_ref.remote())
                 if snapshot_ref is None:
                     time.sleep(0.01)
@@ -123,7 +117,6 @@ class Player(ABC):
                     self.evaluation_counter += neval
 
                     # --- Exchange Logic (Reimplemented with local snapshot) ---
-                    #global_state = ray.get(self.storage.get_snapshot.remote())
                     front = global_state['front']
                     front_eval = global_state['front_eval']
                     best = global_state['best']

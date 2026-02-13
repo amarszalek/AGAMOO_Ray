@@ -98,15 +98,24 @@ class AGAMOO:
         with tqdm(total=self.max_eval, unit='eval', disable=tqdm_disable) as pbar:
             while True:
                 # Pobierz status z aktora Storage
-                status = ray.get(self.storage.get_status.remote())
+                #status = ray.get(self.storage.get_status.remote())
+
+                ref = ray.get(self.ref_holder.get_ref.remote())
+                if ref is None:
+                    time.sleep(0.1)
+                    continue
+
+                state = ray.get(ref)
+                current_evals = state.get('evaluations', 0)
+                stop_flag = state.get('stop_flag', False)
 
                 # Aktualizacja paska postępu
-                current_evals = status['evaluations']
+                # current_evals = status['evaluations']
                 pbar.n = min(current_evals, self.max_eval)
                 pbar.refresh()
 
                 # Sprawdzenie warunku stopu
-                if status['stop_flag']:
+                if stop_flag: #['stop_flag']:
                     break
 
                 time.sleep(0.5)  # Odświeżanie co 0.5s
@@ -156,11 +165,8 @@ class GlobalStorage:
 
         self.ref_holder = ref_holder
 
-        #self.snapshot_ref = None
-
         # Stan wewnętrzny
         self.reset()
-        #self._refresh_snapshot_ref()  # Inicjalizacja pierwszej referencji
 
     def set_players(self, players):
         """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
@@ -182,7 +188,8 @@ class GlobalStorage:
             'iter_counters': self.iter_counters,
             'patterns': self.patterns,
             'next_iter': self.next_iter,
-            'stop_flag': self.stop_flag
+            'stop_flag': self.stop_flag,
+            'evaluations': self.total_evaluations
         }
         # ray.put zapisuje dane w pamięci (Plasma Store) i zwraca lekki identyfikator
         ref = ray.put(snapshot_data)
@@ -190,13 +197,6 @@ class GlobalStorage:
         # Wysyłamy referencję do RefHoldera asynchronicznie!
         # Nie czekamy (brak await/ray.get), po prostu wysyłamy sygnał.
         self.ref_holder.update_ref.remote([ref])
-
-    #def get_snapshot_ref(self):
-    #    """
-    #    Zwraca TYLKO referencję (ObjectRef).
-    #    Ta operacja jest błyskawiczna i nie blokuje aktora na czas przesyłu danych.
-    #    """
-    #    return self.snapshot_ref
 
     def reset(self):
         """Resetuje stan do wartości początkowych przed nową optymalizacją."""
@@ -220,21 +220,6 @@ class GlobalStorage:
 
         self._refresh_snapshot_ref()
 
-    #def get_snapshot(self):
-    #    """
-    #    Zwraca "migawkę" stanu dla graczy (Players).
-    #    Dzięki Ray Plasma Store, duże tablice (front) są przesyłane przez zero-copy.
-    #    """
-    #    return {
-    #        'front': self.front,
-    #        'front_eval': self.front_eval,
-    #        'best': self.best,
-    #        'iter_counters': self.iter_counters,
-    #        'patterns': self.patterns,
-     #       'next_iter': self.next_iter,
-    #        'stop_flag': self.stop_flag
-    #    }
-
     def get_status(self):
         """Zwraca status dla paska postępu (Driver)."""
         return {
@@ -243,23 +228,6 @@ class GlobalStorage:
             'stop_flag': self.stop_flag,
             'front_size': len(self.front)
         }
-
-    #def get_status_flags(self):
-     #   """Lekka metoda do szybkiego sprawdzenia synchronizacji."""
-     #   return {
-     #       'stop_flag': self.stop_flag,
-    #        'next_iter': self.next_iter,
-     #       'iter_counters': self.iter_counters,
-    #        'patterns': self.patterns  # To jest małe, można przesłać
-     #   }
-
-    #def get_pareto_front(self):
-    #    """Ciężka metoda pobierająca dane."""
-    #    return {
-    #        'front': self.front,
-    #        'front_eval': self.front_eval,
-    #        'best': self.best
-    #   }
 
     def get_results(self):
         """Zwraca końcowe wyniki."""
@@ -335,16 +303,9 @@ class GlobalStorage:
                         futures.append(evaluator.evaluate.remote(pop, i))
                         target_objs.append(i)
 
-
-                    # Zlecamy obliczenie evaluatorowi
-                    #futures.append(self.evaluator_handle.evaluate.remote(pop, i))
-                    #target_objs.append(i)
-
             # Czekamy na wyniki (non-blocking await w Ray)
             if futures:
-                #results = await ray.gather(futures)  # Dostępne w nowszym Ray lub używamy pętli await
                 results = await asyncio.gather(*futures)
-                # Alternatywnie: results = await asyncio.gather(*futures) jeśli futures są awaitable
 
                 for idx, res in enumerate(results):
                     obj_idx = target_objs[idx]
