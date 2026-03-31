@@ -5,14 +5,14 @@ import logging
 import asyncio
 import traceback
 from tqdm.auto import tqdm
-from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens
+from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens, adaptive_linear_assigning_gens
 
 logger = logging.getLogger(__name__)
 
 
 class AGAMOO:
     def __init__(self, max_eval, change_iter, next_iter, max_front, max_front_tol=0,
-                 init_pop='separate', front_f=None, verbose=False):
+                 init_pop='separate', front_f=None, verbose=False, assing_gens='random'):
 
         self.max_eval = max_eval
         self.change_iter = change_iter
@@ -22,6 +22,7 @@ class AGAMOO:
         self.init_pop = init_pop
         self.front_f = front_f
         self.verbose = verbose
+        self.assing_gens = assing_gens
 
         self.players = []
         self.evaluators = None
@@ -70,7 +71,7 @@ class AGAMOO:
 
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
-            self.max_front, self.max_front_tol, self.front_f, ref_holder=self.ref_holder
+            self.max_front, self.max_front_tol, self.front_f, ref_holder=self.ref_holder, assing_gens=self.assing_gens
         )
         return self.storage
 
@@ -149,7 +150,7 @@ class GlobalStorage:
     """
 
     def __init__(self, nvars, nobjs, max_eval, change_iter, next_iter, max_front,
-                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None):
+                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None, assing_gens='random'):
         self.nvars = nvars
         self.nobjs = nobjs
         self.max_eval = max_eval
@@ -162,6 +163,7 @@ class GlobalStorage:
         self.evaluators = []  # Lista aktorów ewaluatorów
         self.eval_rr_index = 0  # Indeks do Round-Robin
         self.verbose = verbose
+        self.assing_gens = assing_gens
 
         self.ref_holder = ref_holder
 
@@ -263,7 +265,12 @@ class GlobalStorage:
             # Logika zmiany wzorców (gens) co change_iter
             min_iter = np.min(self.iter_counters)
             if min_iter - self.min_iter_pop >= self.change_iter:
-                self.patterns = assigning_gens(self.nvars, self.nobjs)
+                if self.assing_gens=='random':
+                    self.patterns = assigning_gens(self.nvars, self.nobjs)
+                elif self.assing_gens=='adaptive_linear':
+                    self.patterns = adaptive_linear_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
+                else:
+                    raise ValueError('Unknown assing gens type')
                 self.min_iter_pop = min_iter
 
             # Jeśli to tylko heartbeat (iter_flag=True), kończymy
