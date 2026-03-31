@@ -391,7 +391,7 @@ class GlobalStorage:
         self.last_logged_iter = current_iter
 
         # Opcjonalny print w konsoli, żebyś widział, że algorytm żyje
-        logger.info(f"[LOG] Iter: {current_iter:4d} | Time: {elapsed_time:6.2f}s | "
+        logger.info(f"[LOG] Iter: {current_iter:4f} | Time: {elapsed_time/1.e9:6.2f}s | "
               f"NFE: {log_entry['nfe_array']} | Front size: {len(log_entry['front_eval'])}")
 
     def save_history(self, filename="agamoo_history.pkl"):
