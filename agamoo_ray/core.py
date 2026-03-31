@@ -174,10 +174,10 @@ class GlobalStorage:
         self.last_logged_iter = 0
 
         self.history = []
-        self.log_current_state(0)
 
         # Stan wewnętrzny
         self.reset()
+        self.log_current_state(0)
 
     def set_players(self, players):
         """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
