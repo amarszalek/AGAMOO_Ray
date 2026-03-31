@@ -4,6 +4,7 @@ import numpy as np
 import logging
 import asyncio
 import traceback
+import pickle
 from tqdm.auto import tqdm
 from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens, adaptive_linear_assigning_gens
 
@@ -150,7 +151,8 @@ class GlobalStorage:
     """
 
     def __init__(self, nvars, nobjs, max_eval, change_iter, next_iter, max_front,
-                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None, assing_gens='random'):
+                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None,
+                 assing_gens='random', log_freq=10):
         self.nvars = nvars
         self.nobjs = nobjs
         self.max_eval = max_eval
@@ -166,6 +168,13 @@ class GlobalStorage:
         self.assing_gens = assing_gens
 
         self.ref_holder = ref_holder
+
+        self.start_time = time.perf_counter_ns()
+        self.log_freq = log_freq  # Co ile iteracji (K) robimy zrzut
+        self.last_logged_iter = 0
+
+        self.history = []
+        self.log_current_state(0)
 
         # Stan wewnętrzny
         self.reset()
@@ -356,9 +365,41 @@ class GlobalStorage:
 
             self._refresh_snapshot_ref()
 
+            if min_iter >= self.last_logged_iter + self.log_freq:
+                self.log_current_state(min_iter)
+
         except Exception as e:
             logger.error(f"GlobalStorage update error: {e}", exc_info=True)
             traceback.print_exc()
+
+    def log_current_state(self, current_iter):
+        """Wykonuje zrzut aktualnego stanu algorytmu do analizy konwergencji."""
+        elapsed_time = time.perf_counter_ns() - self.start_time
+
+        log_entry = {
+            "iteration": current_iter,
+            "wall_clock_time": elapsed_time,
+            # Kopia tablicy NFE dla poszczególnych kryteriów: [NFE_f1, NFE_f2, NFE_f3]
+            "nfe_array": self.evaluations_count.copy(),
+            # Suma wszystkich ewaluacji (przydatne do ogólnych statystyk)
+            "nfe_total": np.sum(self.evaluations_count),
+            # Kopia aktualnego frontu Pareto (tylko wartości kryteriów są potrzebne do HV)
+            "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([])
+        }
+
+        self.history.append(log_entry)
+        self.last_logged_iter = current_iter
+
+        # Opcjonalny print w konsoli, żebyś widział, że algorytm żyje
+        logger.info(f"[LOG] Iter: {current_iter:4d} | Time: {elapsed_time:6.2f}s | "
+              f"NFE: {log_entry['nfe_array']} | Front size: {len(log_entry['front_eval'])}")
+
+    def save_history(self, filename="agamoo_history.pkl"):
+        """Zapisuje zebraną historię do pliku po zakończeniu optymalizacji."""
+        with open(filename, 'wb') as f:
+            pickle.dump(self.history, f)
+        logger.info(f"Historia konwergencji zapisana do pliku: {filename}")
+
 
 @ray.remote
 class RefHolder:
