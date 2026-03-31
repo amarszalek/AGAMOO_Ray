@@ -18,10 +18,10 @@ class RE21(Objective):
         L = 200.0
     
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return L * ((2 * x[:,0]) + np.sqrt(2.0) * x[:,1] + np.sqrt(x[:,2]) + x[:,3])
         elif self.obj == 1:
-            time.sleep(0.06)
+            time.sleep(0.0012)
             return ((F * L) / E) * ((2.0 / x[:,0]) + (2.0 * np.sqrt(2.0) / x[:,1]) - (2.0 * np.sqrt(2.0) / x[:,2]) + (2.0 / x[:,3]))
         else:
             raise ValueError('obj')
@@ -43,10 +43,10 @@ class RE22(Objective):
         x3 = x[:, 2]
     
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return (29.4 * x1) + (0.6 * x2 * x3)
         elif self.obj == 1:
-            time.sleep(0.085)
+            time.sleep(0.0017)
             g0 = (x1 * x3) - 7.735 * ((x1 * x1) / x2) - 180.0
             g1 = 4.0 - (x3 / x2)
             g0 = np.where(g0 < 0, -g0, 0)
@@ -72,10 +72,10 @@ class RE23(Objective):
 
         # First original objective function
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return (0.6224 * x1 * x3 * x4) + (1.7781 * x2 * x3 * x3) + (3.1661 * x1 * x1 * x4) + (19.84 * x1 * x1 * x3)
         elif self.obj == 1:
-            time.sleep(0.087)
+            time.sleep(0.0017)
             # Original constraint functions
             g0 = x1 - (0.0193 * x3)
             g1 = x2 - (0.00954 * x3)
@@ -102,10 +102,10 @@ class RE24(Objective):
 
         # First original objective function
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return x1 + (120 * x2)
         elif self.obj == 1:
-            time.sleep(0.75)
+            time.sleep(0.0150)
             E = 700000
             sigma_b_max = 700
             tau_max = 450
@@ -150,10 +150,10 @@ class RE25(Objective):
 
         # first original objective function
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return (np.pi * np.pi * x2 * x3 * x3 * (x1 + 2)) / 4.0
         elif self.obj == 1:
-            time.sleep(0.235)
+            time.sleep(0.0047)
             # constraint functions
             Cf = ((4.0 * (x2 / x3) - 1) / (4.0 * (x2 / x3) - 4)) + (0.615 * x3 / x2)
             Fmax = 1000.0
@@ -203,14 +203,14 @@ class RE31(Objective):
 
         # First original objective function
         if self.obj == 0:
-            time.sleep(0.07)
+            time.sleep(0.0014)
             return x1 * np.sqrt(16.0 + (x3 * x3)) + x2 * np.sqrt(1.0 + x3 * x3)
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # Second original objective function
             return (20.0 * np.sqrt(16.0 + (x3 * x3))) / (x1 * x3)
         elif self.obj == 2:
-            time.sleep(0.317)
+            time.sleep(0.0063)
             # Constraint functions
             f0 = x1 * np.sqrt(16.0 + (x3 * x3)) + x2 * np.sqrt(1.0 + x3 * x3)
             f1 = (20.0 * np.sqrt(16.0 + (x3 * x3))) / (x1 * x3)
@@ -250,14 +250,14 @@ class RE32(Objective):
 
         # First original objective function
         if self.obj == 0:
-            time.sleep(0.07)
+            time.sleep(0.0014)
             return (1.10471 * x1 * x1 * x2) + (0.04811 * x3 * x4) * (14.0 + x2)
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # Second original objective function
             return (4 * P * L * L * L) / (E * x4 * x3 * x3 * x3)
         elif self.obj == 2:
-            time.sleep(0.72)
+            time.sleep(0.0144)
             # Constraint functions
             M = P * (L + (x2 / 2))
             tmpVar = ((x2 * x2) / 4.0) + np.power((x1 + x3) / 2.0, 2)
@@ -303,14 +303,14 @@ class RE33(Objective):
 
         # First original objective function
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return 4.9 * 1e-5 * (x2 * x2 - x1 * x1) * (x4 - 1.0)
         elif self.obj == 1:
-            time.sleep(0.08)
+            time.sleep(0.0016)
             # Second original objective function
             return ((9.82 * 1e6) * (x2 * x2 - x1 * x1)) / (x3 * x4 * (x2 * x2 * x2 - x1 * x1 * x1))
         elif self.obj == 2:
-            time.sleep(0.404)
+            time.sleep(0.0081)
             # Reformulated objective functions
             g0 = (x2 - x1) - 20.0
             g1 = 0.4 - (x3 / (3.14 * (x2 * x2 - x1 * x1)))
@@ -336,16 +336,16 @@ class RE34(Objective):
         
     def evaluate(self, x):
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return 1640.2823 + (2.3573285 * x[:, 0]) + (2.3220035 * x[:, 1]) + (4.5688768 * x[:, 2]) + (
                         7.7213633 * x[:, 3]) + (4.4559504 * x[:, 4])
         elif self.obj == 1:
-            time.sleep(0.126)
+            time.sleep(0.0025)
             return 6.5856 + (1.15 * x[:, 0]) - (1.0427 * x[:, 1]) + (0.9738 * x[:, 2]) + (0.8364 * x[:, 3]) - (
                         0.3695 * x[:, 0] * x[:, 3]) + (0.0861 * x[:, 0] * x[:, 4]) + (0.3628 * x[:, 1] * x[:, 3]) - (
                                0.1106 * x[:, 0] * x[:, 0]) - (0.3437 * x[:, 2] * x[:, 2]) + (0.1764 * x[:, 3] * x[:, 3])
         elif self.obj == 2:
-            time.sleep(0.130)
+            time.sleep(0.0026)
             return -0.0551 + (0.0181 * x[:, 0]) + (0.1024 * x[:, 1]) + (0.0421 * x[:, 2]) - (
                         0.0073 * x[:, 0] * x[:, 1]) + (0.024 * x[:, 1] * x[:, 2]) - (0.0118 * x[:, 1] * x[:, 3]) - (
                                0.0204 * x[:, 2] * x[:, 3]) - (0.008 * x[:, 2] * x[:, 4]) - (
@@ -372,16 +372,16 @@ class RE35(Objective):
         x7 = x[:,6]
         
         if self.obj == 0:
-            time.sleep(0.111)
+            time.sleep(0.0022)
             # First original objective function (weight)
             return 0.7854 * x1 * (x2 * x2) * (((10.0 * x3 * x3) / 3.0) + (14.933 * x3) - 43.0934) - 1.508 * x1 * (x6 * x6 + x7 * x7) + 7.477 * (x6 * x6 * x6 + x7 * x7 * x7) + 0.7854 * (x4 * x6 * x6 + x5 * x7 * x7)
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # Second original objective function (stress)
             tmpVar = np.power((745.0 * x4) / (x2 * x3), 2.0)  + 1.69 * 1e7
             return np.sqrt(tmpVar) / (0.1 * x6 * x6 * x6)
         elif self.obj == 2:
-            time.sleep(0.484)
+            time.sleep(0.0097)
             # Constraint functions 	
             tmpVar = np.power((745.0 * x4) / (x2 * x3), 2.0)  + 1.69 * 1e7
             f1 = np.sqrt(tmpVar) / (0.1 * x6 * x6 * x6)
@@ -429,15 +429,15 @@ class RE36(Objective):
         x4 = np.round(x[:,3])
 
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # First original objective function
             return np.abs(6.931 - ((x3 / x1) * (x4 / x2)))
         elif self.obj == 1:
-            time.sleep(0.064)
+            time.sleep(0.0013)
             # Second original objective function (the maximum value among the four variables)
             return np.max(x, axis=1)
         elif self.obj == 2:
-            time.sleep(0.083)
+            time.sleep(0.0017)
             f0 = np.abs(6.931 - ((x3 / x1) * (x4 / x2)))
             g0 = 0.5 - (f0 / 6.931)    
             g0 = np.where(g0 < 0, -g0, 0)                
@@ -461,15 +461,15 @@ class RE37(Objective):
         xOPTT = x[:,3]
 
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # f1 (TF_max)
             return 0.692 + (0.477 * xAlpha) - (0.687 * xHA) - (0.080 * xOA) - (0.0650 * xOPTT) - (0.167 * xAlpha * xAlpha) - (0.0129 * xHA * xAlpha) + (0.0796 * xHA * xHA) - (0.0634 * xOA * xAlpha) - (0.0257 * xOA * xHA) + (0.0877 * xOA * xOA) - (0.0521 * xOPTT * xAlpha) + (0.00156 * xOPTT * xHA) + (0.00198 * xOPTT * xOA) + (0.0184 * xOPTT * xOPTT)
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # f2 (X_cc)
             return 0.153 - (0.322 * xAlpha) + (0.396 * xHA) + (0.424 * xOA) + (0.0226 * xOPTT) + (0.175 * xAlpha * xAlpha) + (0.0185 * xHA * xAlpha) - (0.0701 * xHA * xHA) - (0.251 * xOA * xAlpha) + (0.179 * xOA * xHA) + (0.0150 * xOA * xOA) + (0.0134 * xOPTT * xAlpha) + (0.0296 * xOPTT * xHA) + (0.0752 * xOPTT * xOA) + (0.0192 * xOPTT * xOPTT)
         elif self.obj == 2:
-            time.sleep(0.79)
+            time.sleep(0.0016)
             # f3 (TT_max
             return 0.370 - (0.205 * xAlpha) + (0.0307 * xHA) + (0.108 * xOA) + (1.019 * xOPTT) - (0.135 * xAlpha * xAlpha) + (0.0141 * xHA * xAlpha) + (0.0998 * xHA * xHA) + (0.208 * xOA * xAlpha) - (0.0301 * xOA * xHA) - (0.226 * xOA * xOA) + (0.353 * xOPTT * xAlpha) - (0.0497 * xOPTT * xOA) - (0.423 * xOPTT * xOPTT) + (0.202 * xHA * xAlpha * xAlpha) - (0.281 * xOA * xAlpha * xAlpha) - (0.342 * xHA * xHA * xAlpha) - (0.245 * xHA * xHA * xOA) + (0.281 * xOA * xOA * xHA) - (0.184 * xOPTT * xOPTT * xAlpha) - (0.281 * xHA * xAlpha * xOA)
         else:
@@ -494,23 +494,23 @@ class RE41(Objective):
         x7 = x[:,6]
 
         if self.obj == 0:
-            time.sleep(0.114)
+            time.sleep(0.0023)
             # First original objective function
             return 1.98 + 4.9 * x1 + 6.67 * x2 + 6.98 * x3 + 4.01 * x4 + 1.78 * x5 + 0.00001 * x6 + 2.73 * x7
 
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # Second original objective function
             return 4.72 - 0.5 * x4 - 0.19 * x2 * x3
 
         elif self.obj == 2:
-            time.sleep(0.106)
+            time.sleep(0.0021)
             # Third original objective function
             Vmbp = 10.58 - 0.674 * x1 * x2 - 0.67275 * x2
             Vfd = 16.45 - 0.489 * x3 * x7 - 0.843 * x5 * x6
             return 0.5 * (Vmbp + Vfd)
         elif self.obj == 3:
-            time.sleep(1.154)
+            time.sleep(0.0231)
             # Constraint functions
             g0 = 1 -(1.16 - 0.3717 * x2 * x4 - 0.0092928 * x3)
             g1 = 0.32 -(0.261 - 0.0159 * x1 * x2 - 0.06486 * x1 -  0.019 * x2 * x7 + 0.0144 * x3 * x5 + 0.0154464 * x6)
@@ -598,17 +598,17 @@ class RE42(Objective):
         annual_cargo = cargo_DWT * RTPA
 
         if self.obj == 0:
-            time.sleep(0.051)
+            time.sleep(0.001)
             return annual_costs / annual_cargo
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return light_ship_weight
         elif self.obj == 2:
-            time.sleep(0.051)
+            time.sleep(0.001)
             # f_2 is dealt as a minimization problem
             return -annual_cargo
         elif self.obj == 3:
-            time.sleep(0.086)
+            time.sleep(0.0017)
             # Reformulated objective functions
             constraintFuncs0 = (x_L / x_B) - 6.0
             constraintFuncs1 = -(x_L / x_D) + 15.0
@@ -649,22 +649,22 @@ class RE61(Objective):
         
     def evaluate(self, x):
         if self.obj == 0:
-            time.sleep(0.1)
+            time.sleep(0.0020)
             return 106780.37 * (x[:, 1] + x[:, 2]) + 61704.67
         elif self.obj == 1:
-            time.sleep(0.05)
+            time.sleep(0.001)
             return 3000 * x[:, 0]
         elif self.obj == 2:
-            time.sleep(0.124)
+            time.sleep(0.0025)
             return 305700 * 2289 * x[:, 1] / np.power(0.06*2289, 0.65)
         elif self.obj == 3:
-            time.sleep(0.209)
+            time.sleep(0.0042)
             return 250 * 2289 * np.exp(-39.75*x[:, 1]+9.9*x[:, 2]+2.74)
         elif self.obj == 4:
-            time.sleep(0.218)
+            time.sleep(0.0044)
             return 25 * (1.39 /(x[:, 0]*x[:, 1]) + 4940*x[:, 2] -80)
         elif self.obj == 5:
-            time.sleep(2.4)
+            time.sleep(0.0480)
             g0 = 1 - (0.00139 / (x[:, 0] * x[:, 1]) + 4.94 * x[:, 2] - 0.08)
             g1 = 1 - (0.000306 / (x[:, 0] * x[:, 1]) + 1.082 * x[:, 2] - 0.0986)
             g2 = 50000 - (12.307 / (x[:, 0] * x[:, 1]) + 49408.24 * x[:, 2] + 4051.02)
@@ -707,47 +707,47 @@ class RE91(Objective):
         x11 = 10 * (np.random.normal(0, 1)) + 0.0
 
         if self.obj == 0:
-            time.sleep(0.05)
+            time.sleep(0.001)
             # First function
             return 1.98 + 4.9 * x1 + 6.67 * x2 + 6.98 * x3 +  4.01 * x4 +  1.75 * x5 +  0.00001 * x6  +  2.73 * x7
         elif self.obj == 1:
-            time.sleep(0.06)
+            time.sleep(0.0012)
             # Second function
             f = (1.16 - 0.3717* x2 * x4 - 0.00931 * x2 * x10 - 0.484 * x3 * x9 + 0.01343 * x6 * x10 )/1.0
             return np.where(f > 0, f, 0)
         elif self.obj == 2:
-            time.sleep(0.08)
+            time.sleep(0.0016)
             # Third function
             f = (0.261 - 0.0159 * x1 * x2 - 0.188 * x1 * x8 - 0.019 * x2 * x7 + 0.0144 * x3 * x5 + 0.87570001 * x5 * x10 + 0.08045 * x6 * x9 + 0.00139 * x8 * x11 + 0.00001575 * x10 * x11)/0.32
             return np.where(f>0, f, 0)
         elif self.obj == 3:
-            time.sleep(0.115)
+            time.sleep(0.0023)
             # Fourth function
             f = (0.214 + 0.00817 * x5 - 0.131 * x1 * x8 - 0.0704 * x1 * x9 + 0.03099 * x2 * x6 - 0.018 * x2 * x7 + 0.0208 * x3 * x8 + 0.121 * x3 * x9 - 0.00364 * x5 * x6 + 0.0007715 * x5 * x10 - 0.0005354 * x6 * x10 + 0.00121 * x8 * x11 + 0.00184 * x9 * x10 - 0.018 * x2 * x2)/0.32
             return np.where(f>0, f, 0)
         elif self.obj == 4:
-            time.sleep(0.065)
+            time.sleep(0.0013)
             # Fifth function  
             f = (0.74 - 0.61* x2 - 0.163 * x3 * x8 + 0.001232 * x3 * x10 - 0.166 * x7 * x9 + 0.227 * x2 * x2)/0.32
             return np.where(f>0, f, 0)
         elif self.obj == 5:
-            time.sleep(0.142)
+            time.sleep(0.0028)
             # Sixth function       
             tmp = (( 28.98 + 3.818 * x3 - 4.2 * x1 * x2 + 0.0207 * x5 * x10 + 6.63 * x6 * x9 - 7.77 * x7 * x8 + 0.32 * x9 * x10) + (33.86 + 2.95 * x3 + 0.1792 * x10 - 5.057 * x1 * x2 - 11 * x2 * x8 - 0.0215 * x5 * x10 - 9.98 * x7 * x8 + 22 * x8 * x9) + (46.36 - 9.9 * x2 - 12.9 * x1 * x8 + 0.1107 * x3 * x10) )/3
             f = tmp/32
             return np.where(f>0, f, 0) 
         elif self.obj == 6:
-            time.sleep(0.061)
+            time.sleep(0.0012)
             # Seventh function
             f = (4.72 - 0.5 * x4 - 0.19 * x2 * x3 - 0.0122 * x4 * x10 + 0.009325 * x6 * x10 + 0.000191 * x11 * x11)/4.0
             return np.where(f>0, f, 0)
         elif self.obj == 7:
-            time.sleep(0.068)
+            time.sleep(0.0014)
             # EighthEighth function   
             f = (10.58 - 0.674 * x1 * x2 - 1.95  * x2 * x8  + 0.02054  * x3 * x10 - 0.0198  * x4 * x10  + 0.028  * x6 * x10)/9.9               
             return np.where(f>0, f, 0)
         elif self.obj == 8:
-            time.sleep(0.053)
+            time.sleep(0.0011)
             f = (16.45 - 0.489 * x3 * x7 - 0.843 * x5 * x6 + 0.0432 * x9 * x10 - 0.0556 * x9 * x11 - 0.000786 * x11 * x11)/15.7
             # Ninth function               
             return np.where(f>0, f, 0)
