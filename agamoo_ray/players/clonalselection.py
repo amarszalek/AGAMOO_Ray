@@ -105,6 +105,7 @@ class ClonalSelection(Player):
 
     def _mutate(self, ind, pattern, norm_rank):
         a, b, sigma = self.mutate_args
+        a = a * norm_rank
         r = np.random.random()
         if r < a:
             ind = self._uniform_mutate(ind, pattern, self.objective.bounds)
