@@ -96,10 +96,10 @@ def adaptive_linear_assigning_gens(front, front_eval, nvars, nobjs):
 
     for i in range(nvars):
         var_data = front[:, i]
-        if np.std(var_data) > 0:
+        if np.std(var_data) > 1e-6:
             for j in range(nobjs):
                 obj_data = front_eval[:, j]
-                if np.std(obj_data) > 0:
+                if np.std(obj_data) > 1e-6:
                     # Zapisujemy bezwzględną wartość korelacji do macierzy
                     corr_matrix[i, j] = np.abs(np.corrcoef(var_data, obj_data)[0, 1])
 
@@ -107,7 +107,7 @@ def adaptive_linear_assigning_gens(front, front_eval, nvars, nobjs):
         corrs = corr_matrix[i, :]
         sum_corrs = np.sum(corrs)
 
-        if sum_corrs > 0:
+        if sum_corrs > 0.05:
             probs = corrs / sum_corrs
         else:
             probs = np.ones(nobjs) / nobjs  # Brak korelacji -> równa szansa
