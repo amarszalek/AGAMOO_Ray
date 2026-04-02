@@ -92,53 +92,69 @@ def adaptive_linear_assigning_gens(front, front_eval, nvars, nobjs):
         return assigning_gens(nvars, nobjs)
 
     patterns = np.zeros((nobjs, nvars), dtype=bool)
+    corr_matrix = np.zeros((nvars, nobjs))
 
     for i in range(nvars):
         var_data = front[:, i]
-
-        # Zabezpieczenie przed brakiem wariancji
-        if np.std(var_data) == 0:
-            probs = np.ones(nobjs) / nobjs  # Równe prawdopodobieństwo dla każdego gracza
-        else:
-            corrs = np.zeros(nobjs)
+        if np.std(var_data) > 0:
             for j in range(nobjs):
                 obj_data = front_eval[:, j]
                 if np.std(obj_data) > 0:
-                    # Liczymy bezwzględną korelację (nie interesuje nas znak, tylko siła)
-                    corrs[j] = np.abs(np.corrcoef(var_data, obj_data)[0, 1])
+                    # Zapisujemy bezwzględną wartość korelacji do macierzy
+                    corr_matrix[i, j] = np.abs(np.corrcoef(var_data, obj_data)[0, 1])
 
-            # Normalizacja korelacji do wektora prawdopodobieństw [0, 1]
-            sum_corrs = np.sum(corrs)
-            if sum_corrs > 0:
-                probs = corrs / sum_corrs
-            else:
-                # Jeśli z jakiegoś powodu wszystkie korelacje wynoszą 0
-                probs = np.ones(nobjs) / nobjs
+    for i in range(nvars):
+        corrs = corr_matrix[i, :]
+        sum_corrs = np.sum(corrs)
 
-        # KLUCZOWA ZMIANA: Losowanie gracza (kryterium) z użyciem wyliczonych prawdopodobieństw
+        if sum_corrs > 0:
+            probs = corrs / sum_corrs
+        else:
+            probs = np.ones(nobjs) / nobjs  # Brak korelacji -> równa szansa
+
         chosen_obj = np.random.choice(nobjs, p=probs)
         patterns[chosen_obj, i] = True
 
-    # Opcjonalne zabezpieczenie: Upewnijmy się, że żaden gracz nie został z pustą ręką
     empty_players = np.where(~np.any(patterns, axis=1))[0]
 
     for j in empty_players:
-        # Szukamy "dawców" - graczy, którzy mają więcej niż 1 gen
-        donor_candidates = np.where(np.sum(patterns, axis=1) > 1)[0]
+        # Pętla aktualizuje "bogatych graczy", bo po kradzieży ktoś mógł przestać być bogaty
+        rich_players = np.where(np.sum(patterns, axis=1) > 1)[0]
 
-        if len(donor_candidates) == 0:
-            # Sytuacja ekstremalna (np. nvars < nobjs).
-            break
+        if len(rich_players) > 0:
+            # === SCENARIUSZ A: KRADZIEŻ ===
+            # Znajdujemy wszystkie zmienne, które można bezpiecznie ukraść
+            stealable_vars = np.where(np.any(patterns[rich_players], axis=0))[0]
 
-        # Wybieramy losowego dawcę z puli bogatych
-        donor = np.random.choice(donor_candidates)
+            # Wybieramy tę zmienną, która ma najwyższą korelację z naszym pustym graczem 'j'
+            obj_corrs = corr_matrix[stealable_vars, j]
+            if np.sum(obj_corrs) > 0:
+                best_stealable_idx = np.argmax(obj_corrs)
+            else:
+                best_stealable_idx = np.random.choice(len(stealable_vars))
 
-        # Pobieramy listę genów należących do tego dawcy i losujemy jeden z nich
-        donor_genes = np.where(patterns[donor])[0]
-        stolen_gene = np.random.choice(donor_genes)
+            var_to_steal = stealable_vars[best_stealable_idx]
 
-        # Bezpieczny transfer genu
-        patterns[donor, stolen_gene] = False
-        patterns[j, stolen_gene] = True
+            # Znajdujemy "ofiarę" (bogatego gracza, który ma ten konkretny gen)
+            owners = np.where(patterns[:, var_to_steal])[0]
+            rich_owners = np.intersect1d(owners, rich_players)
+            victim = rich_owners[0]
+
+            # Wykonujemy transfer (Zabieramy ofierze, dajemy pustemu)
+            patterns[victim, var_to_steal] = False
+            patterns[j, var_to_steal] = True
+
+        else:
+            # === SCENARIUSZ B: WSPÓŁDZIELENIE ===
+            # Wszyscy gracze mają już po 1 genie. Nie możemy kraść.
+            # Wybieramy absolutnie najlepszy gen z całej puli.
+            obj_corrs = corr_matrix[:, j]
+            if np.sum(obj_corrs) > 0:
+                best_var = np.argmax(obj_corrs)
+            else:
+                best_var = np.random.choice(nvars)
+
+            # Przyznajemy uprawnienia (BEZ odbierania ich obecnemu właścicielowi)
+            patterns[j, best_var] = True
 
     return patterns
