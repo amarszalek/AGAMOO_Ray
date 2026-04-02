@@ -62,7 +62,8 @@ class ClonalSelection(Player):
         else:  # base strategy
             for rank, arg in enumerate(arg_sort):
                 clone_num = max(int(self.nclone / (rank + 1) + 0.5), 1)
-                clones = np.array([self._mutate(temp_pop[arg], pattern) for _ in range(clone_num)])
+                norm_rank = rank / max(1, len(arg_sort) - 1)
+                clones = np.array([self._mutate(temp_pop[arg], pattern, norm_rank) for _ in range(clone_num)])
                 clones = clones[np.any(clones != temp_pop[arg], axis=1)]
 
                 if clones.shape[0] > 0:
@@ -102,19 +103,48 @@ class ClonalSelection(Player):
 
         return temp_pop, temp_pop_eval, evaluation_counter
 
-    def _mutate(self, ind, pattern):
+    def _mutate(self, ind, pattern, norm_rank):
         a, b, sigma = self.mutate_args
         r = np.random.random()
         if r < a:
             ind = self._uniform_mutate(ind, pattern, self.objective.bounds)
         elif r < b:
-            ind = self._gaussian_mutate(ind, pattern, self.objective.bounds, sigma)
+            dynamic_sigma = sigma * (1.0 + 4.0 * norm_rank)
+            ind = self._gaussian_mutate(ind, pattern, self.objective.bounds, dynamic_sigma)
         else:
             ind = self._bound_mutate(ind, pattern, self.objective.bounds)
         return ind
 
     @staticmethod
     def _uniform_mutate(individual, pattern, bounds):
+        ind = individual.copy()
+        s = np.sum(pattern)
+        if s == 0:
+            return ind
+
+        # 1. Tworzenie maski mutacji (szansa 1/s na gen z patternu)
+        r = np.random.random(pattern.shape) < (1.0 / s)
+        mutate_mask = np.logical_and(pattern, r)
+
+        # 2. Fallback: Jeśli nic się nie wylosowało, mutujemy jeden losowy gen
+        if not np.any(mutate_mask):
+            indx = np.where(pattern)[0]
+            k = np.random.choice(indx)
+            mutate_mask[k] = True
+
+        # 3. Wektoryzacja: Pobieramy granice tylko dla mutowanych genów
+        bounds_arr = np.array(bounds)
+        a = bounds_arr[mutate_mask, 0]
+        b = bounds_arr[mutate_mask, 1]
+
+        # 4. Aplikacja mutacji - np.random.uniform obsługuje tablice dla 'low' i 'high'!
+        ind[mutate_mask] = np.random.uniform(a, b)
+
+        return ind
+
+
+    @staticmethod
+    def _uniform_mutate_old(individual, pattern, bounds):
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
@@ -137,6 +167,45 @@ class ClonalSelection(Player):
 
     @staticmethod
     def _bound_mutate(individual, pattern, bounds):
+        ind = individual.copy()
+        s = np.sum(pattern)
+        if s == 0:
+            return ind
+
+        # 1. Tworzenie maski mutacji
+        r = np.random.random(pattern.shape) < (1.0 / s)
+        mutate_mask = np.logical_and(pattern, r)
+
+        # 2. Fallback
+        if not np.any(mutate_mask):
+            indx = np.where(pattern)[0]
+            k = np.random.choice(indx)
+            mutate_mask[k] = True
+
+        # 3. Pobieranie danych do obliczeń wektorowych
+        bounds_arr = np.array(bounds)
+        a = bounds_arr[mutate_mask, 0]
+        b = bounds_arr[mutate_mask, 1]
+
+        num_mutated = np.sum(mutate_mask)
+        current_vals = ind[mutate_mask]
+
+        # 4. Wektorowe losowanie parametrów r1 i r2 dla wszystkich mutowanych genów naraz
+        r1 = np.random.random(num_mutated)
+        r2 = np.random.uniform(0, 1, num_mutated)
+
+        # 5. Obliczamy oba warianty równolegle (lewy i prawy skok)
+        val_lower = a + (current_vals - a) * r2
+        val_upper = current_vals + (b - current_vals) * r2
+
+        # 6. Wybieramy odpowiedni wariant na podstawie r1 < 0.5 (Wektoryzowany odpowiednik if/else)
+        ind[mutate_mask] = np.where(r1 < 0.5, val_lower, val_upper)
+
+        return ind
+
+
+    @staticmethod
+    def _bound_mutate_old(individual, pattern, bounds):
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
@@ -169,6 +238,38 @@ class ClonalSelection(Player):
 
     @staticmethod
     def _gaussian_mutate(individual, pattern, bounds, sigma):
+        ind = individual.copy()
+        s = np.sum(pattern)
+        if s == 0:
+            return ind
+
+        # Prawdopodobieństwo mutacji poszczególnych genów (1/s)
+        r = np.random.random(pattern.shape) < (1.0 / s)
+        mutate_mask = np.logical_and(pattern, r)
+
+        # Fallback: Jeśli nic się nie wylosowało, mutujemy jeden losowy gen z patternu
+        if not np.any(mutate_mask):
+            indx = np.where(pattern)[0]
+            k = np.random.choice(indx)
+            mutate_mask[k] = True
+
+        # Zamiast pętli 'for k in indx:', robimy wszystko w jednej operacji wektorowej!
+        # Konwersja bounds do array (najlepiej zrobić to raz w __init__, ale tu dla spójności)
+        bounds_arr = np.array(bounds)
+
+        # Pobieramy tylko te granice, które będą mutowane
+        a = bounds_arr[mutate_mask, 0]
+        b = bounds_arr[mutate_mask, 1]
+
+        # Wektorowe losowanie szumu Gaussa dla wszystkich wybranych genów naraz
+        noise = sigma * (b - a) * np.random.randn(np.sum(mutate_mask))
+
+        # Aplikujemy szum i docinamy do granic (np.clip robi to błyskawicznie i wektorowo)
+        ind[mutate_mask] = np.clip(ind[mutate_mask] + noise, a, b)
+
+        return ind
+    @staticmethod
+    def _gaussian_mutate_old(individual, pattern, bounds, sigma):
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
