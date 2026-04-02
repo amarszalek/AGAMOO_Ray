@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class AGAMOO:
     def __init__(self, max_eval, change_iter, next_iter, max_front, max_front_tol=0,
-                 init_pop='separate', front_f=None, verbose=False, assing_gens='random'):
+                 init_pop='separate', front_f=None, verbose=False, assing_gens='random', log_freq=10):
 
         self.max_eval = max_eval
         self.change_iter = change_iter
@@ -24,6 +24,7 @@ class AGAMOO:
         self.front_f = front_f
         self.verbose = verbose
         self.assing_gens = assing_gens
+        self.log_freq = log_freq
 
         self.players = []
         self.evaluators = None
@@ -73,7 +74,7 @@ class AGAMOO:
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
             self.max_front, self.max_front_tol, self.front_f, ref_holder=self.ref_holder,
-            assing_gens=self.assing_gens
+            assing_gens=self.assing_gens, log_freq=self.log_freq,
         )
         return self.storage
 
