@@ -83,6 +83,49 @@ def assigning_gens(nvars, nobjs):
 
 def adaptive_linear_assigning_gens(front, front_eval, nvars, nobjs):
     """
+    Hybrydowe przypisanie zmiennych:
+    1. BAZA: Całkowicie losowe przypisanie (1 gracz na 1 zmienną).
+    2. WIEDZA: Jeśli zmienna wykazuje silną korelację z kryterium gracza,
+       gracz ten OTRZYMUJE do niej dostęp (niezależnie od bazy).
+    """
+
+    # 1. BAZA: Zwykły, losowy przydział (Gwarancja pokrycia)
+    patterns = assigning_gens(nvars, nobjs)
+    # Jeśli front jest zbyt mały do analizy statystycznej,
+    # używamy zwykłego losowego przypisania
+    if len(front) < 10:
+        return patterns
+
+    # 2. BUDOWA MACIERZY KORELACJI
+    corr_matrix = np.zeros((nvars, nobjs))
+
+    for i in range(nvars):
+        var_data = front[:, i]
+        if np.std(var_data) > 1e-6:
+            for j in range(nobjs):
+                obj_data = front_eval[:, j]
+                if np.std(obj_data) > 1e-6:
+                    # Zapisujemy bezwzględną wartość korelacji do macierzy
+                    corr_matrix[i, j] = np.abs(np.corrcoef(var_data, obj_data)[0, 1])
+
+    # 3. WSTRZYKNIĘCIE WIEDZY (Istotne korelacje)
+    # ---------------------------------------------------------
+    # corr_matrix.T transponuje macierz do kształtu (nobjs, nvars)
+    # Tworzymy maskę logiczną tam, gdzie korelacja jest ponadprzecietna
+    mean_corr = np.mean(corr_matrix)
+    std_corr = np.std(corr_matrix)
+    dynamic_threshold = mean_corr + std_corr
+
+    significant_mask = corr_matrix.T >= dynamic_threshold
+
+    # KLUCZOWY KROK: Łączymy bazę z wiedzą statystyczną za pomocą OR
+    patterns = np.logical_or(patterns, significant_mask)
+
+    return patterns
+
+
+def adaptive_linear_assigning_gens_old(front, front_eval, nvars, nobjs):
+    """
     Adaptacyjnie przypisuje zmienne do graczy na podstawie korelacji Pearsona
     między wartością zmiennej a wartością funkcji celu na obecnym froncie.
     """
