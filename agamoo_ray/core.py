@@ -5,6 +5,7 @@ import logging
 import asyncio
 import traceback
 import pickle
+from copy import deepcopy
 from tqdm.auto import tqdm
 from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens, adaptive_linear_assigning_gens
 
@@ -176,6 +177,7 @@ class GlobalStorage:
         self.last_logged_iter = 0
 
         self.history = []
+        self.lpatterns = []
 
         # Stan wewnętrzny
         self.reset()
@@ -283,6 +285,7 @@ class GlobalStorage:
                 else:
                     raise ValueError('Unknown assing gens type')
                 self.min_iter_pop = min_iter
+            self.lpatterns.append(self.patterns.copy())
 
             # Jeśli to tylko heartbeat (iter_flag=True), kończymy
             if data.get('iter_flag', False):
@@ -386,11 +389,14 @@ class GlobalStorage:
             # Suma wszystkich ewaluacji (przydatne do ogólnych statystyk)
             "nfe_total": np.sum(self.evaluations_count),
             # Kopia aktualnego frontu Pareto (tylko wartości kryteriów są potrzebne do HV)
-            "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([])
+            "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([]),
+            "patterns": deepcopy(self.lpatterns)
         }
+
 
         self.history.append(log_entry)
         self.last_logged_iter = current_iter
+        self.lpatterns = []
 
         # Opcjonalny print w konsoli, żebyś widział, że algorytm żyje
         logger.info(f"[LOG] Iter: {current_iter:4f} | Time: {elapsed_time/1.e9:6.2f}s | "
