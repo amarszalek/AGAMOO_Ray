@@ -1,47 +1,105 @@
 import numpy as np
 import ray
-import time
 from copy import deepcopy
+from typing import Dict, Any, Tuple, Optional, List
+
 from agamoo_ray.player import Player
+from agamoo_ray.objective import Objective
 
 
 @ray.remote
 class ClonalSelection(Player):
-    def __init__(self, num, npop, player_param, objective, storage_actor,
-                 gens='pattern', exchange='front_random', verbose=False, init_pop=None):
+    """
+        Asynchronous Ray Actor implementing the Clonal Selection Algorithm (CSA).
 
-        # Pobieranie parametrów specyficznych dla ClonalSelection
-        self.nclone = player_param.get('nclone', 15)
-        self.mutate_args = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
-        self.sup = player_param.get('sup', 0.0)
-        self.strategy = player_param.get('strategy', 'base')
+        Inspired by the biological immune system's principle of clonal selection,
+        this actor performs local and global search operations (cloning, hypermutation,
+        and selection based on affinity) on a specific subset of decision variables.
+    """
+    def __init__(self,
+                 num: int,
+                 npop: int,
+                 player_param: Dict[str, Any],
+                 objective: Objective,
+                 storage_actor: Any,
+                 gens: str = 'pattern',
+                 exchange: str ='front_sup',
+                 verbose: bool = False,
+                 init_pop: Optional[np.ndarray] = None):
+        """
+        Initializes the Clonal Selection Player.
 
-        # Inicjalizacja klasy bazowej Player (wersja Ray)
-        super().__init__(num, npop, objective, storage_actor,
-                         gens, exchange, verbose, init_pop)
+        Args:
+            num (int): Unique identifier index for the player.
+            npop (int): Population size (number of antibodies).
+            player_param (Dict[str, Any]): Hyperparameters for the CSA algorithm:
+                - 'nclone' (int): Maximum number of clones generated for the best individual.
+                - 'mutate_args' (List[float]): Probabilities/parameters for [uniform, gaussian, bound] mutations.
+                - 'sup' (float): Suppression factor (0.0 to 1.0) for diversity injection.
+                - 'strategy' (str): Selection strategy ('base' or 'all_best').
+            objective (Objective): The objective function (antigen) to optimize.
+            storage_actor (Any): Handle to the GlobalStorage Ray Actor.
+            gens (str): Gene allocation strategy ('pattern' or 'all').
+            exchange (str): Gene exchange strategy for cooperative coevolution.
+            verbose (bool): Enables detailed execution logging.
+            init_pop (np.ndarray, optional): Custom initial population array.
+        """
+        # Extract CSA-specific hyperparameters
+        self.nclone: int = player_param.get('nclone', 15)
+        self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
+        self.sup: float = player_param.get('sup', 0.0)
+        self.strategy: str = player_param.get('strategy', 'base')
 
-    def step(self, pop, pop_eval, pattern):
+        # Initialize the base Player class
+        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
+
+    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+        """
+        Executes a single evolutionary cycle of the Clonal Selection algorithm.
+
+        Steps:
+        1. Affinity Evaluation (Sorting based on objective values).
+        2. Proliferation (Cloning inversely proportional to rank).
+        3. Affinity Maturation (Hypermutation of clones).
+        4. Selection (Replacing parent if clone is superior).
+        5. Receptor Editing / Suppression (Injecting random diversity).
+
+        Args:
+            pop (np.ndarray): Current population (antibodies).
+            pop_eval (np.ndarray): Evaluated objective values (affinity).
+            pattern (np.ndarray): Boolean mask indicating modifiable decision variables.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, int]: Updated population, updated evaluations, and number of evaluations.
+        """
         temp_pop = deepcopy(pop)
         temp_pop_eval = deepcopy(pop_eval)
+
+        # Sort population to determine affinity (lower evaluation = better rank)
         arg_sort = temp_pop_eval.argsort()
-        indices = []
-        better = []
-        better_eval = []
-        evaluation_counter = 0
+
+        indices: List[int] = []
+        better: List[np.ndarray] = []
+        better_eval: List[float] = []
+        evaluation_counter: int = 0
 
         if self.strategy == 'all_best':
-            all_clones = None
-            all_clones_eval = None
-            for rank, arg in enumerate(arg_sort):
-                clone_num = max(int(self.nclone / (rank + 1) + 0.5), 1)
-                clones = np.array([self._mutate(temp_pop[arg], pattern) for _ in range(clone_num)])
+            # 'all_best' strategy: Pool all clones together and select the top N individuals overall
+            all_clones: Optional[np.ndarray] = None
+            all_clones_eval: Optional[np.ndarray] = None
 
+            for rank, arg in enumerate(arg_sort):
+                # Number of clones is inversely proportional to rank
+                clone_num = max(int(self.nclone / (rank + 1) + 0.5), 1)
+                # Clone and mutate
+                norm_rank = rank / max(1, len(arg_sort) - 1)
+                clones = np.array([self._mutate(temp_pop[arg], pattern, norm_rank) for _ in range(clone_num)])
+                # Filter out clones that did not change
                 clones = clones[np.any(clones != temp_pop[arg], axis=1)]
 
                 if clones.shape[0] > 0:
                     clones = self.repair.do(clones)
                     clones_eval = self.objective.evaluate(clones)
-
                     evaluation_counter += clones.shape[0]
 
                     if all_clones is None:
@@ -52,61 +110,65 @@ class ClonalSelection(Player):
                         all_clones_eval = np.append(all_clones_eval, clones_eval)
 
             if all_clones is not None:
+                # Combine original population with all generated clones
                 all_clones = np.vstack([all_clones, temp_pop])
                 all_clones_eval = np.append(all_clones_eval, temp_pop_eval)
+                # Select the absolute best individuals to form the new population
                 arg_sort = all_clones_eval.argsort()
-
                 temp_pop[:, :] = all_clones[arg_sort[:temp_pop.shape[0]], :]
                 temp_pop_eval[:] = all_clones_eval[arg_sort[:temp_pop_eval.shape[0]]]
 
-        else:  # base strategy
+        else:
+            # 'base' strategy: Tournament between a single parent and its own clones
             for rank, arg in enumerate(arg_sort):
                 clone_num = max(int(self.nclone / (rank + 1) + 0.5), 1)
                 norm_rank = rank / max(1, len(arg_sort) - 1)
+
                 clones = np.array([self._mutate(temp_pop[arg], pattern, norm_rank) for _ in range(clone_num)])
                 clones = clones[np.any(clones != temp_pop[arg], axis=1)]
 
                 if clones.shape[0] > 0:
                     clones = self.repair.do(clones)
                     clones_eval = self.objective.evaluate(clones)
-
                     evaluation_counter += clones.shape[0]
+                    # Find the best clone among the generated batch
                     argmin = clones_eval.argmin()
-
+                    # Replace parent if the best clone has higher affinity
                     if clones_eval[argmin] < temp_pop_eval[arg]:
                         indices.append(arg)
                         better.append(clones[argmin])
                         better_eval.append(clones_eval[argmin])
 
             if len(better) > 0:
-                better = np.stack(better)
-                better_eval = np.stack(better_eval)
-                temp_pop[indices] = better
-                temp_pop_eval[indices] = better_eval
+                temp_pop[indices] = np.stack(better)
+                temp_pop_eval[indices] = np.stack(better_eval)
 
-        # Obsługa parametru 'sup' (suppression/diversity injection)
+        # Receptor Editing (Suppression): Replace worst individuals with random new ones
         d = int(pop.shape[0] * self.sup)
         if d > 0:
+            # Get indices of the worst 'd' individuals
             inds = temp_pop_eval.argsort()[-d:]
             pop_sup = np.zeros((inds.shape[0], self.objective.n_var))
             for i in range(inds.shape[0]):
-                pop_sup[i] = pop_sup[i] + np.where(pattern,
-                                                   self._create_individual_uniform(self.objective.bounds),
-                                                   temp_pop[inds[i]])
+                # Only replace the genes governed by the current player's pattern
+                pop_sup[i] = np.where(pattern,
+                                      self._create_individual_uniform(self.objective.bounds),
+                                      temp_pop[inds[i]])
 
             pop_sup = self.repair.do(pop_sup)
             pop_eval_sup = self.objective.evaluate(pop_sup)
-
             evaluation_counter += pop_sup.shape[0]
+
             temp_pop[inds, :] = pop_sup[:, :]
             temp_pop_eval[inds] = pop_eval_sup[:]
 
         return temp_pop, temp_pop_eval, evaluation_counter
 
-    def _mutate(self, ind, pattern, norm_rank):
+    def _mutate(self, ind: np.ndarray, pattern: np.ndarray, norm_rank: float) -> np.ndarray:
+        """Applies hypermutation operators based on defined probabilities."""
         a, b, sigma = self.mutate_args
-        #a = a * norm_rank
         r = np.random.random()
+
         if r < a:
             ind = self._uniform_mutate(ind, pattern, self.objective.bounds)
         elif r < b:
@@ -117,73 +179,43 @@ class ClonalSelection(Player):
         return ind
 
     @staticmethod
-    def _uniform_mutate(individual, pattern, bounds):
+    def _uniform_mutate(individual: np.ndarray, pattern: np.ndarray, bounds: List[Tuple[float, float]]) -> np.ndarray:
+        """Highly optimized, vectorized uniform mutation."""
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
             return ind
 
-        # 1. Tworzenie maski mutacji (szansa 1/s na gen z patternu)
         r = np.random.random(pattern.shape) < (1.0 / s)
         mutate_mask = np.logical_and(pattern, r)
 
-        # 2. Fallback: Jeśli nic się nie wylosowało, mutujemy jeden losowy gen
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
             k = np.random.choice(indx)
             mutate_mask[k] = True
 
-        # 3. Wektoryzacja: Pobieramy granice tylko dla mutowanych genów
         bounds_arr = np.array(bounds)
         a = bounds_arr[mutate_mask, 0]
         b = bounds_arr[mutate_mask, 1]
-
-        # 4. Aplikacja mutacji - np.random.uniform obsługuje tablice dla 'low' i 'high'!
         ind[mutate_mask] = np.random.uniform(a, b)
-
-        return ind
-
-
-    @staticmethod
-    def _uniform_mutate_old(individual, pattern, bounds):
-        ind = individual.copy()
-        s = np.sum(pattern)
-        if s == 0:
-            return ind
-        r = np.random.random(pattern.shape) < 1 / s
-        r = np.logical_and(pattern, r)
-        indx = np.where(r)[0]
-        if len(indx) > 0:
-            for k in indx:
-                a = bounds[k][0]
-                b = bounds[k][1]
-                ind[k] = np.random.uniform(a, b)
-        else:
-            indx = np.where(pattern)[0]
-            k = np.random.choice(indx)
-            a = bounds[k][0]
-            b = bounds[k][1]
-            ind[k] = np.random.uniform(a, b)
         return ind
 
     @staticmethod
-    def _bound_mutate(individual, pattern, bounds):
+    def _bound_mutate(individual: np.ndarray, pattern: np.ndarray, bounds: List[Tuple[float, float]]) -> np.ndarray:
+        """Highly optimized, vectorized boundary mutation."""
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
             return ind
 
-        # 1. Tworzenie maski mutacji
         r = np.random.random(pattern.shape) < (1.0 / s)
         mutate_mask = np.logical_and(pattern, r)
 
-        # 2. Fallback
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
             k = np.random.choice(indx)
             mutate_mask[k] = True
 
-        # 3. Pobieranie danych do obliczeń wektorowych
         bounds_arr = np.array(bounds)
         a = bounds_arr[mutate_mask, 0]
         b = bounds_arr[mutate_mask, 1]
@@ -191,114 +223,34 @@ class ClonalSelection(Player):
         num_mutated = np.sum(mutate_mask)
         current_vals = ind[mutate_mask]
 
-        # 4. Wektorowe losowanie parametrów r1 i r2 dla wszystkich mutowanych genów naraz
         r1 = np.random.random(num_mutated)
         r2 = np.random.uniform(0, 1, num_mutated)
 
-        # 5. Obliczamy oba warianty równolegle (lewy i prawy skok)
         val_lower = a + (current_vals - a) * r2
         val_upper = current_vals + (b - current_vals) * r2
-
-        # 6. Wybieramy odpowiedni wariant na podstawie r1 < 0.5 (Wektoryzowany odpowiednik if/else)
         ind[mutate_mask] = np.where(r1 < 0.5, val_lower, val_upper)
-
-        return ind
-
-
-    @staticmethod
-    def _bound_mutate_old(individual, pattern, bounds):
-        ind = individual.copy()
-        s = np.sum(pattern)
-        if s == 0:
-            return ind
-        r = np.random.random(pattern.shape) < 1 / s
-        r = np.logical_and(pattern, r)
-        indx = np.where(r)[0]
-        if len(indx) > 0:
-            for k in indx:
-                a = bounds[k][0]
-                b = bounds[k][1]
-                r1 = np.random.random()
-                r2 = np.random.uniform(0, 1)
-                if r1 < 0.5:
-                    ind[k] = a + (ind[k] - a) * r2
-                else:
-                    ind[k] = (b - ind[k]) * r2 + ind[k]
-        else:
-            indx = np.where(pattern)[0]
-            k = np.random.choice(indx)
-            a = bounds[k][0]
-            b = bounds[k][1]
-            r1 = np.random.random()
-            r2 = np.random.uniform(0, 1)
-            if r1 < 0.5:
-                ind[k] = a + (ind[k] - a) * r2
-            else:
-                ind[k] = (b - ind[k]) * r2 + ind[k]
         return ind
 
     @staticmethod
-    def _gaussian_mutate(individual, pattern, bounds, sigma):
+    def _gaussian_mutate(individual: np.ndarray, pattern: np.ndarray, bounds: List[Tuple[float, float]], sigma: float) -> np.ndarray:
+        """Highly optimized, vectorized Gaussian noise mutation."""
         ind = individual.copy()
         s = np.sum(pattern)
         if s == 0:
             return ind
 
-        # Prawdopodobieństwo mutacji poszczególnych genów (1/s)
         r = np.random.random(pattern.shape) < (1.0 / s)
         mutate_mask = np.logical_and(pattern, r)
 
-        # Fallback: Jeśli nic się nie wylosowało, mutujemy jeden losowy gen z patternu
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
             k = np.random.choice(indx)
             mutate_mask[k] = True
 
-        # Zamiast pętli 'for k in indx:', robimy wszystko w jednej operacji wektorowej!
-        # Konwersja bounds do array (najlepiej zrobić to raz w __init__, ale tu dla spójności)
         bounds_arr = np.array(bounds)
-
-        # Pobieramy tylko te granice, które będą mutowane
         a = bounds_arr[mutate_mask, 0]
         b = bounds_arr[mutate_mask, 1]
 
-        # Wektorowe losowanie szumu Gaussa dla wszystkich wybranych genów naraz
         noise = sigma * (b - a) * np.random.randn(np.sum(mutate_mask))
-
-        # Aplikujemy szum i docinamy do granic (np.clip robi to błyskawicznie i wektorowo)
         ind[mutate_mask] = np.clip(ind[mutate_mask] + noise, a, b)
-
-        return ind
-    @staticmethod
-    def _gaussian_mutate_old(individual, pattern, bounds, sigma):
-        ind = individual.copy()
-        s = np.sum(pattern)
-        if s == 0:
-            return ind
-        r = np.random.random(pattern.shape) < 1 / s
-        r = np.logical_and(pattern, r)
-        indx = np.where(r)[0]
-        if len(indx) > 0:
-            for k in indx:
-                a = bounds[k][0]
-                b = bounds[k][1]
-                ran = sigma * (b - a) * np.random.randn() + ind[k]
-                if a <= ran <= b:
-                    ind[k] = ran
-                elif ran < a:
-                    ind[k] = a
-                else:
-                    ind[k] = b
-        else:
-            indx = np.where(pattern)[0]
-            k = np.random.choice(indx)
-            a = bounds[k][0]
-            b = bounds[k][1]
-            ran = sigma * (b - a) * np.random.randn() + ind[k]
-            if a <= ran <= b:
-                ind[k] = ran
-            elif ran < a:
-                ind[k] = a
-            else:
-                ind[k] = b
         return ind

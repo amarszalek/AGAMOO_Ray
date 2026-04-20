@@ -3,7 +3,10 @@ import time
 import ray
 import traceback
 import logging
+
 from abc import ABC, abstractmethod
+from typing import Any, Tuple, Optional, List
+
 from agamoo_ray.repair import DefaultRepair
 from agamoo_ray.utils import front_suppression
 from agamoo_ray.objective import Objective
@@ -13,64 +16,94 @@ logger = logging.getLogger(__name__)
 
 class Player(ABC):
     """
-    Base class for an autonomous 'Player' entity.
-    In the Ray version, concrete implementations of this class (like ClonalSelection)
-    should be decorated with @ray.remote to become Actors.
+    Abstract base class for an autonomous 'Player' entity in the AGAMOO framework.
+
+    In the Ray-based architecture, concrete implementations of this class
+    (e.g., ClonalSelection) should be decorated with @ray.remote to operate
+    as independent, asynchronous Actors representing specific optimization objectives.
     """
 
-    def __init__(self, num: int, npop: int, objective: Objective, storage_actor,
-                 gens='pattern', exchange='mix', verbose=False, init_pop=None):
+    def __init__(self,
+                 num: int,
+                 npop: int,
+                 objective: Objective,
+                 storage_actor: Any,
+                 gens: str ='pattern',
+                 exchange: str ='front_sup',
+                 verbose: bool =False,
+                 init_pop: Optional[np.ndarray] = None):
+        """
+        Initializes the Player entity.
+
+        Args:
+            num (int): Unique identifier index for the player.
+            npop (int): Population size managed by this specific player.
+            objective (Objective): The specific objective function this player aims to optimize.
+            storage_actor (Any): Handle to the GlobalStorage Ray Actor.
+            gens (str): Gene allocation strategy ('pattern' or 'all').
+            exchange (str): Gene exchange strategy ('mix', 'original', 'front_random', 'front_sup').
+            verbose (bool): Enables detailed execution logging.
+            init_pop (np.ndarray, optional): Custom initial population array.
+        """
         self.num = num
         self.npop = npop
         self.objective = objective
-        self.storage = storage_actor  # Handle to GlobalStorage Actor
+        self.storage = storage_actor
         self.gens = gens
         self.exchange = exchange
         self.verbose = verbose
         self.repair = DefaultRepair()
         self.init_pop = init_pop
 
-        self.ref_holder = None
+        self.ref_holder: Optional[Any] = None
 
-        self.iteration = 0
-        self.evaluation_counter = 0
+        self.iteration: int = 0
+        self.evaluation_counter: int = 0
 
-    def set_repair(self, repair):
+    def set_repair(self, repair: Any) -> None:
+        """Assigns a custom repair mechanism for out-of-bounds solutions."""
         if repair is not None:
             self.repair = repair
 
-    def set_infrastructure(self, storage, ref_holder):
-        """Metoda do wstrzykiwania zależności"""
+    def set_infrastructure(self, storage: Any, ref_holder: Any) -> None:
+        """
+        Dependency injection for distributed Ray components.
+
+        Args:
+            storage (Any): Handle to the GlobalStorage Actor.
+            ref_holder (Any): Handle to the RefHolder Actor for non-blocking reads.
+        """
         self.storage = storage
         self.ref_holder = ref_holder
 
-    def start(self):
+    def start(self) -> None:
         """
-        Main loop of the player. In Ray, this runs inside the Actor's process.
+        Main execution loop of the player. When deployed via Ray, this runs
+        continuously inside the Actor's dedicated process, enabling true asynchronous
+        optimization without global barriers.
         """
         if self.verbose:
             logger.info(f"Player {self.num} started (Ray Actor).")
 
         obj_idx = self.objective.obj
         next_iter_counter = 0
-        iters_pop = None
+        iters_pop: Optional[np.ndarray] = None
 
-        # Local initialization
+        # Local population initialization
         if self.init_pop is not None:
             pop = self.init_pop.copy()
         else:
             pop = self.create_population()
 
-        # Initial Evaluation
+        # Initial Evaluation & Repair
         pop = self.repair.do(pop)
         pop_eval = self.objective.evaluate(pop)
         self.evaluation_counter += pop.shape[0]
 
         if self.verbose:
-            logger.info(f"Player {self.num} evaluated init population")
+            logger.info(f"Player {self.num} evaluated the initial population.")
 
-        # Initial update to Global Storage
-        # We send the initial population to storage
+        # Dispatch initial population to the Global Storage asynchronously
         self.storage.update.remote({
             'nobj': obj_idx,
             'population': pop,
@@ -82,7 +115,7 @@ class Player(ABC):
 
         try:
             while True:
-                # Fetch Global State Snapshot
+                # 1. Fetch Global State Snapshot (Non-blocking via RefHolder)
                 snapshot_ref = ray.get(self.ref_holder.get_ref.remote())
                 if snapshot_ref is None:
                     time.sleep(0.01)
@@ -90,11 +123,13 @@ class Player(ABC):
 
                 global_state = ray.get(snapshot_ref)
 
+                # Check for termination signal
                 if global_state['stop_flag']:
                     if self.verbose:
-                        logger.info(f"Player {self.num} received stop signal.")
+                        logger.info(f"Player {self.num} received stop signal. Terminating loop.")
                     break
 
+                # Retrieve current locus assignment (DVA mechanism)
                 patterns = global_state['patterns']
                 pattern = patterns[obj_idx]
                 next_iter = global_state['next_iter']
@@ -104,7 +139,7 @@ class Player(ABC):
 
                     if pattern.sum() > 0:
                         try:
-                            # Step execution
+                            # Execute optimization step only on assigned variables
                             if self.gens == 'all':
                                 pop, pop_eval, neval = self.step(pop, pop_eval, np.ones_like(pattern, dtype=bool))
                             else:
@@ -116,7 +151,8 @@ class Player(ABC):
                     self.iteration += 1
                     self.evaluation_counter += neval
 
-                    # --- Exchange Logic (Reimplemented with local snapshot) ---
+                    # --- Cooperative Coevolution Exchange Logic ---
+                    # Integrating external knowledge into the local population's unassigned genes
                     front = global_state['front']
                     front_eval = global_state['front_eval']
                     best = global_state['best']
@@ -125,29 +161,28 @@ class Player(ABC):
                         nn = pop.shape[0]
                         inds = np.random.choice(front.shape[0], nn, replace=True)
                         for i in range(nn):
-                            # Ensure we don't overwrite the optimized genes (pattern)
+                            # Inject non-optimized genes from random Pareto front members
                             pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
 
-                    elif ('front_sup'in self.exchange) and (len(front) > 0):
+                    elif ('front_sup' in self.exchange) and (len(front) > 0):
                         proc = 100
                         se = self.exchange.split('_')
                         if (len(se) == 3) and (0 < int(se[2]) < 100):
                             proc = int(se[2])
 
-                        # Local shuffle of the front copy
                         arr = np.arange(front.shape[0])
                         np.random.shuffle(arr)
                         local_front = front[arr]
                         local_front_eval = front_eval[arr]
 
+                        # Apply distance suppression to maintain diversity during exchange
                         target_size = int(pop.shape[0] * (proc / 100))
                         if target_size < local_front.shape[0]:
                             mask = front_suppression(local_front_eval, target_size)
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
-                            nn = int(pop.shape[0] * (proc / 100))
-                            nn = min(nn, local_front.shape[0])
+                            nn = min(target_size, local_front.shape[0])
                             inds = np.random.choice(local_front.shape[0], nn, replace=True)
                             for i in range(nn):
                                 pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
@@ -163,13 +198,13 @@ class Player(ABC):
                         if (len(se) == 2) and (0 < int(se[1]) < 100):
                             proc = int(se[1])
 
-                        # Part 1: Mix from Best
+                        # Phase 1: Integrate genes from the specific best solutions
                         limit_idx = int(pop.shape[0] * (proc / 100))
                         for i in range(len(best)):
                             if (i != obj_idx) and (best[i] is not None):
                                 pop[:limit_idx, patterns[i]] = best[i][patterns[i]]
 
-                        # Part 2: Mix from Front
+                        # Phase 2: Integrate genes from the diverse Pareto front
                         arr = np.arange(front.shape[0])
                         np.random.shuffle(arr)
                         local_front = front[arr]
@@ -181,34 +216,31 @@ class Player(ABC):
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
-                            # Handle edge case where suppression reduced size too much
                             actual_nn = min(nn, local_front.shape[0])
                             inds = np.random.choice(local_front.shape[0], actual_nn, replace=True)
                             for i in range(actual_nn):
                                 pop[limit_idx + i, np.logical_not(pattern)] = local_front[
                                     inds[i], np.logical_not(pattern)]
 
-                    # Final Repair & Evaluate after Exchange
+                    # Final Repair & Evaluate post-exchange to guarantee valid solutions
                     pop = self.repair.do(pop)
                     pop_eval = self.objective.evaluate(pop)
 
                     self.evaluation_counter += pop.shape[0]
                     next_iter_counter += 1
 
-                # 2. Synchronization Check
-                # Fetch iteration counters from snapshot
+                # 2. Synchronization and Heartbeat Logic
                 iters = global_state['iter_counters'].copy()
-                iters[obj_idx] = self.iteration  # update local knowledge
+                iters[obj_idx] = self.iteration
 
                 iters_mask = np.zeros(len(iters), dtype=bool)
                 for i in range(len(iters)):
                     if iters_pop is None or iters_pop[i] < iters[i]:
                         iters_mask[i] = True
 
-                # 3. Send update to Global Storage
-                # If conditions met, send full population, else just heartbeat
+                # 3. Global Storage Update Dispatch
+                # Transmit full payload if other players have progressed, else send a lightweight heartbeat
                 if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
-                    # Asynchronous update (Fire and forget)
                     self.storage.update.remote({
                         'nobj': obj_idx,
                         'population': pop.copy(),
@@ -218,7 +250,7 @@ class Player(ABC):
                         'iter_flag': False
                     })
                     if self.verbose:
-                        logger.info(f"Player {self.num} sent pop at iter {self.iteration}")
+                        logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
 
                     next_iter_counter = 0
                     iters_pop = iters.copy()
@@ -229,7 +261,7 @@ class Player(ABC):
                         'iter_flag': True,
                         'iteration': self.iteration
                     })
-                    # Small sleep to prevent busy loop hammering the storage if waiting
+                    # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
 
         except Exception as e:
@@ -237,28 +269,41 @@ class Player(ABC):
             traceback.print_exc()
         finally:
             if self.verbose:
-                logger.info(f"Player {self.num} exiting.")
+                logger.info(f"Player {self.num} successfully exited.")
 
     @abstractmethod
-    def step(self, pop, pop_eval, pattern):
+    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
         """
-        Abstract method to implement in subclasses.
-        This method will be called repeatedly in the loop.
-        """
-        raise NotImplementedError('You must override this method in your class!')
+        Abstract method defining the core evolutionary step (e.g., Clonal Selection, Mutation).
+        Must be implemented by subclasses.
 
-    def evaluate_only(self, pop):
-        """Metoda pomocnicza dla GlobalStorage do doliczania brakujących kryteriów."""
+        Args:
+            pop (np.ndarray): Current population matrix.
+            pop_eval (np.ndarray): Evaluated objective values for the population.
+            pattern (np.ndarray): Boolean mask indicating which decision variables this player can modify.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, int]: Updated population, updated evaluations, and number of evaluations performed.
+        """
+        raise NotImplementedError('Subclasses must override the step() method.')
+
+    def evaluate_only(self, pop: np.ndarray) -> np.ndarray:
+        """
+        Helper method utilized by GlobalStorage to compute missing criteria
+        for solutions generated by other players.
+        """
         return self.objective.evaluate(pop)
 
-    def create_population(self):
+    def create_population(self) -> np.ndarray:
+        """Generates the initial population using uniform distribution across variable bounds."""
         pop = np.zeros((self.npop, self.objective.n_var))
         for i in range(self.npop):
             pop[i] = self._create_individual_uniform(self.objective.bounds)
         return pop
 
     @staticmethod
-    def _create_individual_uniform(bounds):
+    def _create_individual_uniform(bounds: List[Tuple[float, float]]) -> np.ndarray:
+        """Creates a single individual within the defined problem boundaries."""
         a = np.array([bounds[k][0] for k in range(len(bounds))])
         b = np.array([bounds[k][1] for k in range(len(bounds))])
         return np.random.uniform(a, b)
@@ -267,12 +312,26 @@ class Player(ABC):
 @ray.remote
 class Evaluator:
     """
-    Dedykowany aktor do przeliczania funkcji celu.
-    Działa jako 'kalkulator' dla GlobalStorage.
+    Dedicated Ray Actor for computing objective functions.
+    Acts as an asynchronous 'calculator node' for the GlobalStorage to balance evaluation loads.
     """
-    def __init__(self, objectives):
+    def __init__(self, objectives: List[Objective]):
+        """
+        Args:
+            objectives (List[Objective]): List of Objective instances to evaluate against.
+        """
         self.objectives = objectives
 
-    def evaluate(self, pop, i):
+    def evaluate(self, pop: np.ndarray, i: int) -> np.ndarray:
+        """
+        Evaluates a population against a specific objective index.
+
+        Args:
+            pop (np.ndarray): The population to evaluate.
+            i (int): Index of the objective function.
+
+        Returns:
+            np.ndarray: Flattened array of evaluation results.
+        """
         res = self.objectives[i].evaluate(pop)
         return np.array(res).flatten()
