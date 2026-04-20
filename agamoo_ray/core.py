@@ -8,13 +8,44 @@ import pickle
 from copy import deepcopy
 from tqdm.auto import tqdm
 from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens, adaptive_linear_assigning_gens
+from typing import List, Dict, Any, Optional, Callable, Union
+
 
 logger = logging.getLogger(__name__)
 
 
 class AGAMOO:
-    def __init__(self, max_eval, change_iter, next_iter, max_front, max_front_tol=0,
-                 init_pop='separate', front_f=None, verbose=False, assing_gens='random', log_freq=10):
+    """
+        Main driver class for the Asynchronous Game Theory Multi-objective
+        Optimization (AGAMOO) framework using the Ray actor model.
+    """
+    def __init__(self,
+                 max_eval: int,
+                 change_iter: int,
+                 next_iter: int,
+                 max_front: int,
+                 max_front_tol: float = 0.0,
+                 init_pop: str = 'separate',
+                 assing_gens: str = 'random',
+                 front_f: Optional[Callable] = None,
+                 verbose: bool = False,
+                 log_freq: int = 0):
+
+        """
+        Initializes the AGAMOO framework.
+
+        Args:
+            max_eval (int): Maximum number of objective function evaluations.
+            change_iter (int): Number of iterations before executing the dynamic variable assignment (DVA).
+            next_iter (int): Base iterations for the player cycle.
+            max_front (int): Maximum size of the global Pareto front archive.
+            max_front_tol (float): Tolerance for the Pareto front size before suppression triggers.
+            init_pop (str): Strategy for initial population generation.
+            assign_gens (str): Strategy for locus allocation ('random' or 'adaptive_linear').
+            front_f (Callable, optional): Custom filtering function for the Pareto front.
+            verbose (bool): Enables detailed logging if True.
+            log_freq (int): Frequency of logging the global state for convergence analysis.
+        """
 
         self.max_eval = max_eval
         self.change_iter = change_iter
@@ -27,31 +58,30 @@ class AGAMOO:
         self.assing_gens = assing_gens
         self.log_freq = log_freq
 
-        self.players = []
-        self.evaluators = None
-        self.storage = None
-        self.results = None
-        self.ref_holder = None
-        self.repair = None
+        self.players: List[Any] = []
+        self.evaluators: List[Any] = []
+        self.storage: Optional[Any] = None
+        self.results: Optional[Dict] = None
+        self.ref_holder: Optional[Any] = None
+        self.repair: Optional[Any] = None
 
-        self.nobjs = 0
-        self.nvars = 0
+        self.nobjs: int = 0
+        self.nvars: int = 0
 
-    def init_players(self, players, evaluator, repair=None):
+    def init_players(self, players: List[Any], evaluator: Union[List[Any], Any], repair: Optional[Any] = None) -> None:
         """
-        Przyjmuje listę aktorów (Players).
-        UWAGA: W tej wersji 'players' to lista uchwytów do aktorów (ActorHandle),
-        a nie instancji klas.
+        Registers the Player and Evaluator Ray actors within the framework.
+
+        Args:
+            players (List[ray.actor.ActorHandle]): List of Player actors.
+            evaluator (Union[List[ray.actor.ActorHandle], ray.actor.ActorHandle]): Evaluator actor(s).
+            repair (Any, optional): Mechanism for repairing out-of-bounds solutions.
         """
         self.players = players
-
-        if isinstance(evaluator, list):
-            self.evaluators = evaluator
-        else:
-            self.evaluators = [evaluator]
-
+        self.evaluators = evaluator if isinstance(evaluator, list) else [evaluator]
         self.repair = repair
-        # Rejestrujemy graczy w storage
+
+        # Register components in the global storage
         ray.get(self.storage.set_players.remote(players))
         ray.get(self.storage.set_evaluator.remote(self.evaluators))
 
@@ -59,10 +89,17 @@ class AGAMOO:
             p.set_infrastructure.remote(self.storage, self.ref_holder)
 
 
-    def create_storage(self, nvars, nobjs, num_cpus=1):
+    def create_storage(self, nvars: int, nobjs: int, num_cpus: int = 1) -> Any:
         """
-        Tworzy instancję GlobalStorage. Należy to wywołać przed utworzeniem graczy,
-        aby przekazać im uchwyt.
+        Initializes the Ray environment and creates the GlobalStorage and RefHolder actors.
+
+        Args:
+            nvars (int): Number of decision variables in the optimization problem.
+            nobjs (int): Number of objective functions.
+            num_cpus (int): Number of CPUs allocated for the storage actor.
+
+        Returns:
+            ray.actor.ActorHandle: Handle to the created GlobalStorage actor.
         """
         self.nvars = nvars
         self.nobjs = nobjs
@@ -79,32 +116,35 @@ class AGAMOO:
         )
         return self.storage
 
-    def start_optimize(self, tqdm_disable=False):
+    def start_optimize(self, tqdm_disable: bool = False) -> None:
+        """
+        Starts the asynchronous optimization process and monitors the stop conditions.
+
+        Args:
+            tqdm_disable (bool): If True, disables the progress bar.
+        """
         if not self.players:
             raise ValueError("Players list is empty. Initialize players first.")
         if not self.storage:
             raise ValueError("Storage not created. Call create_storage() first.")
 
-        # Reset stanu (na wypadek ponownego uruchomienia)
+        # Reset global state for a fresh run
         ray.get(self.storage.reset.remote())
 
         if self.verbose:
-            logger.info("Starting optimization with Ray...")
+            logger.info("Starting AGAMOO optimization using Ray...")
 
-        # Uruchomienie graczy
+        # Start asynchronous player loops
         for p in self.players:
             p.set_repair.remote(self.repair)
             p.start.remote()
 
         if self.verbose:
-            logger.info("Running players ...")
+            logger.info("Players are running in the background...")
 
-        # Główna pętla monitorująca (Driver Loop)
+        # Driver loop: Monitoring the global state via non-blocking RefHolder
         with tqdm(total=self.max_eval, unit='eval', disable=tqdm_disable) as pbar:
             while True:
-                # Pobierz status z aktora Storage
-                #status = ray.get(self.storage.get_status.remote())
-
                 ref = ray.get(self.ref_holder.get_ref.remote())
                 if ref is None:
                     time.sleep(0.1)
@@ -114,30 +154,28 @@ class AGAMOO:
                 current_evals = state.get('evaluations', 0)
                 stop_flag = state.get('stop_flag', False)
 
-                # Aktualizacja paska postępu
-                # current_evals = status['evaluations']
                 pbar.n = min(current_evals, self.max_eval)
                 pbar.refresh()
 
-                # Sprawdzenie warunku stopu
-                if stop_flag: #['stop_flag']:
+                if stop_flag:
                     break
 
-                time.sleep(0.5)  # Odświeżanie co 0.5s
+                time.sleep(0.5)
 
         if self.verbose:
             logger.info("Optimization finished.")
 
-        # Zabijamy aktorów graczy, aby zakończyć ich pętle while True
+        # Terminate player actors
         for p in self.players:
             ray.kill(p)
 
-    def get_results(self, key=None):
+    def get_results(self, key: Optional[str] = None) -> Any:
+        """Retrieves the final optimization results from the global storage."""
         if not self.storage:
             return None
 
-        ref = ray.get(self.ref_holder.get_ref.remote())
         if key:
+            ref = ray.get(self.ref_holder.get_ref.remote())
             if ref is None:
                 return None
             snapshot = ray.get(ref)
@@ -149,13 +187,24 @@ class AGAMOO:
 @ray.remote
 class GlobalStorage:
     """
-    Aktor Ray odpowiedzialny za przechowywanie globalnego stanu optymalizacji,
-    zarządzanie frontem Pareto oraz synchronizację iteracji.
+    Ray actor responsible for maintaining the global state, Pareto front archive,
+    and handling the Dynamic Variable Assignment mechanisms.
     """
 
-    def __init__(self, nvars, nobjs, max_eval, change_iter, next_iter, max_front,
-                 max_front_tol=0.0, front_f=None, verbose=False, ref_holder=None,
-                 assing_gens='random', log_freq=10):
+    def __init__(self,
+                 nvars: int,
+                 nobjs: int,
+                 max_eval: int,
+                 change_iter: int,
+                 next_iter: int,
+                 max_front: int,
+                 assign_gens: str = 'random',
+                 max_front_tol: float = 0.0,
+                 front_f: Optional[Callable] = None,
+                 verbose: bool = False,
+                 ref_holder: Optional[Any] = None,
+                 log_freq=0):
+
         self.nvars = nvars
         self.nobjs = nobjs
         self.max_eval = max_eval
@@ -164,38 +213,39 @@ class GlobalStorage:
         self.max_front = max_front
         self.max_front_tol = max_front_tol
         self.front_f = front_f
-        self.players_handles = []  # Uchwyty do aktorów graczy
-        self.evaluators = []  # Lista aktorów ewaluatorów
-        self.eval_rr_index = 0  # Indeks do Round-Robin
+
+        self.players_handles: List[Any] = []
+        self.evaluators: List[Any] = []
+        self.eval_rr_index: int = 0  # Round-Robin index for load balancing
         self.verbose = verbose
-        self.assing_gens = assing_gens
+        self.assign_gens = assign_gens
 
         self.ref_holder = ref_holder
 
         self.start_time = time.perf_counter_ns()
-        self.log_freq = log_freq  # Co ile iteracji (K) robimy zrzut
+        self.log_freq = log_freq
         self.last_logged_iter = 0
 
-        self.history = []
-        self.lpatterns = []
+        self.history: List[Dict] = []
+        self.lpatterns: List[np.ndarray] = []
 
-        # Stan wewnętrzny
+        # Internal state initialization
         self.reset()
         self.log_current_state(0)
 
-    def set_players(self, players):
-        """Rejestruje uchwyty do graczy, aby móc zlecać im obliczenia."""
+    def set_players(self, players: List[Any]) -> None:
+        """Registers player actor handles."""
         self.players_handles = players
 
-    def set_evaluator(self, evaluators):
-        """Rejestruje uchwyty do procesów obliczeniowych (Ewaluatorów)."""
-        if isinstance(evaluators, list):
-            self.evaluators = evaluators
-        else:
-            self.evaluators = [evaluators]
+    def set_evaluator(self, evaluators: Union[List[Any], Any]) -> None:
+        """Registers evaluator actor handles."""
+        self.evaluators = evaluators if isinstance(evaluators, list) else [evaluators]
 
-    def _refresh_snapshot_ref(self):
-        """Metoda pomocnicza tworząca snapshot w Object Store"""
+    def _refresh_snapshot_ref(self) -> None:
+        """
+        Creates a snapshot of the global state in the Ray Plasma Store and
+        asynchronously passes the reference to the RefHolder.
+        """
         snapshot_data = {
             'front': self.front,
             'front_eval': self.front_eval,
@@ -206,15 +256,14 @@ class GlobalStorage:
             'stop_flag': self.stop_flag,
             'evaluations': self.total_evaluations
         }
-        # ray.put zapisuje dane w pamięci (Plasma Store) i zwraca lekki identyfikator
+        # ray.put stores data in shared memory and returns a lightweight ObjectRef
         ref = ray.put(snapshot_data)
 
-        # Wysyłamy referencję do RefHoldera asynchronicznie!
-        # Nie czekamy (brak await/ray.get), po prostu wysyłamy sygnał.
+        # Asynchronous, non-blocking signal to RefHolder
         self.ref_holder.update_ref.remote([ref])
 
-    def reset(self):
-        """Resetuje stan do wartości początkowych przed nową optymalizacją."""
+    def reset(self) -> None:
+        """Resets the internal state before a new optimization run."""
         self.front = np.empty((0, self.nvars))
         self.front_eval = np.empty((0, self.nobjs))
         self.best = [None] * self.nobjs
@@ -227,16 +276,14 @@ class GlobalStorage:
         self.stop_flag = False
         self.min_iter_pop = 0
 
-        # Inicjalizacja wzorców (gens)
+        # Initialize variable patterns (genes)
         self.patterns = assigning_gens(self.nvars, self.nobjs)
-
-        # Inne metryki
         self.total_evaluations = 0
 
         self._refresh_snapshot_ref()
 
-    def get_status(self):
-        """Zwraca status dla paska postępu (Driver)."""
+    def get_status(self) -> Dict[str, Any]:
+        """Returns the current optimization status."""
         return {
             'iterations': self.iter_counters,
             'evaluations': self.total_evaluations,
@@ -244,9 +291,8 @@ class GlobalStorage:
             'front_size': len(self.front)
         }
 
-    def get_results(self):
-        """Zwraca końcowe wyniki."""
-        # Ostatnie filtrowanie przed zwróceniem wyników
+    def get_results(self) -> Dict[str, Any]:
+        """Returns the final, suppressed Pareto front and evaluations stats."""
         final_front = self.front
         final_front_eval = self.front_eval
 
@@ -262,46 +308,47 @@ class GlobalStorage:
             'evaluations': self.evaluations_count
         }
 
-    async def update(self, data):
+    async def update(self, data: Dict[str, Any]) -> None:
         """
-        Główna metoda aktualizująca stan na podstawie danych od Gracza.
+        Main asynchronous method handling updates from Player actors.
+        Updates the global Pareto archive and evaluates missing criteria.
         """
         try:
             nobj = data['nobj']
             iteration = data.get('iteration', 0)
-            if self.verbose:
-                logger.info(f"GlobalStorage received update form obj {nobj}")
 
-            # Aktualizacja liczników iteracji
+            if self.verbose:
+                logger.info(f"GlobalStorage received update from objective {nobj}")
+
             self.iter_counters[nobj] = iteration
 
-            # Logika zmiany wzorców (gens) co change_iter
+            # Dynamic Variable Assignment logic
             min_iter = np.min(self.iter_counters)
             if min_iter - self.min_iter_pop >= self.change_iter:
-                if self.assing_gens=='random':
+                if self.assign_gens=='random':
                     self.patterns = assigning_gens(self.nvars, self.nobjs)
-                elif self.assing_gens=='adaptive_linear':
+                elif self.assign_gens=='adaptive_linear':
                     self.patterns = adaptive_linear_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
                 else:
-                    raise ValueError('Unknown assing gens type')
+                    raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
                 self.min_iter_pop = min_iter
+
             self.lpatterns.append(self.patterns.copy())
 
-            # Jeśli to tylko heartbeat (iter_flag=True), kończymy
+            # Return early if it's just a heartbeat
             if data.get('iter_flag', False):
                 return
 
-            # 2. Pobranie danych populacji
+            # Extract population data
             pop = data['population']
             pop_eval_partial = data['population_eval']
             neval = data['evaluation_counter']
 
-            # Aktualizacja statystyk czasu i liczby ewaluacji
             if neval > 0:
                 self.evaluations_count[nobj] = neval
             self.total_evaluations = np.min(self.evaluations_count)
 
-            # 3. Aktualizacja Best Solution dla danej funkcji celu
+            # Update the Best Solution for the corresponding objective
             if len(pop_eval_partial) > 0:
                 best_idx = np.argmin(pop_eval_partial)
                 self.best[nobj] = pop[best_idx].copy()
@@ -311,30 +358,27 @@ class GlobalStorage:
 
             futures = []
             target_objs = []
-
-            # Liczba dostępnych workerów
             num_workers = len(self.evaluators)
 
+            # Evaluate the population on remaining objectives
             for i in range(self.nobjs):
-                if i != nobj:
-                    if num_workers > 0:
-                        evaluator = self.evaluators[self.eval_rr_index % num_workers]
-                        self.eval_rr_index += 1
-                        # Zlecenie zadania asynchronicznego
-                        futures.append(evaluator.evaluate.remote(pop, i))
-                        target_objs.append(i)
+                if i != nobj and num_workers > 0:
+                    evaluator = self.evaluators[self.eval_rr_index % num_workers]
+                    self.eval_rr_index += 1
+                    futures.append(evaluator.evaluate.remote(pop, i))
+                    target_objs.append(i)
 
-            # Czekamy na wyniki (non-blocking await w Ray)
+            # Gather results asynchronously
             if futures:
                 results = await asyncio.gather(*futures)
-
                 for idx, res in enumerate(results):
                     obj_idx = target_objs[idx]
                     pop_eval[:, obj_idx] = res
                     self.evaluations_count[obj_idx] += pop.shape[0]
+
             self.total_evaluations = np.min(self.evaluations_count)
 
-            # Dołączamy nową populację do istniejącego frontu
+            # Merge with the global Pareto front
             if len(self.front) == 0:
                 self.front = pop
                 self.front_eval = pop_eval
@@ -342,88 +386,84 @@ class GlobalStorage:
                 self.front = np.vstack([self.front, pop])
                 self.front_eval = np.vstack([self.front_eval, pop_eval])
 
-            # Filtrowanie niezdominowanych
+            # Non-dominated selection
             if len(self.front) > 1:
                 mask = get_not_dominated(self.front_eval)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
-            # Dodatkowe filtrowanie użytkownika (front_f)
+            # Custom user filtering (front_f)
             if self.front_f is not None and len(self.front) > 0:
                 mask = self.front_f(self.front_eval)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
-            # Suppression (ograniczanie rozmiaru frontu)
-            limit = self.max_front
-            if self.max_front_tol > 0:
-                limit = int(self.max_front * (1.0 + self.max_front_tol))
+            # Archive suppression (Size limit)
+            limit = int(self.max_front * (1.0 + self.max_front_tol)) if self.max_front_tol > 0 else self.max_front
 
             if len(self.front) > limit:
                 mask = front_suppression(self.front_eval, self.max_front)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
-            # Sprawdzenie warunku stopu
+            # Stop condition check
             if self.max_eval > 0 and self.total_evaluations >= self.max_eval:
                 self.stop_flag = True
 
             self._refresh_snapshot_ref()
 
-            if min_iter >= self.last_logged_iter + self.log_freq:
+            # Logging logic
+            if self.log_freq > 0 and (min_iter >= self.last_logged_iter + self.log_freq):
                 self.log_current_state(min_iter)
 
         except Exception as e:
             logger.error(f"GlobalStorage update error: {e}", exc_info=True)
             traceback.print_exc()
 
-    def log_current_state(self, current_iter):
-        """Wykonuje zrzut aktualnego stanu algorytmu do analizy konwergencji."""
+    def log_current_state(self, current_iter: int) -> None:
+        """Dumps the current algorithm state for convergence tracking."""
         elapsed_time = time.perf_counter_ns() - self.start_time
 
         log_entry = {
             "iteration": current_iter,
             "wall_clock_time": elapsed_time,
-            # Kopia tablicy NFE dla poszczególnych kryteriów: [NFE_f1, NFE_f2, NFE_f3]
             "nfe_array": self.evaluations_count.copy(),
-            # Suma wszystkich ewaluacji (przydatne do ogólnych statystyk)
             "nfe_total": np.sum(self.evaluations_count),
-            # Kopia aktualnego frontu Pareto (tylko wartości kryteriów są potrzebne do HV)
             "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([]),
             "patterns": deepcopy(self.lpatterns)
         }
-
 
         self.history.append(log_entry)
         self.last_logged_iter = current_iter
         self.lpatterns = []
 
-        # Opcjonalny print w konsoli, żebyś widział, że algorytm żyje
-        logger.info(f"[LOG] Iter: {current_iter:4f} | Time: {elapsed_time/1.e9:6.2f}s | "
-              f"NFE: {log_entry['nfe_array']} | Front size: {len(log_entry['front_eval'])}")
+        if self.verbose:
+            logger.info(f"[LOG] Iter: {current_iter:4.0f} | Time: {elapsed_time / 1.e9:6.2f}s | "
+                        f"NFE: {log_entry['nfe_array']} | Front size: {len(log_entry['front_eval'])}")
 
-    def save_history(self, filename="agamoo_history.pkl"):
-        """Zapisuje zebraną historię do pliku po zakończeniu optymalizacji."""
+    def save_history(self, filename: str = "agamoo_history.pkl") -> None:
+        """Saves the optimization history to a pickle file."""
         with open(filename, 'wb') as f:
             pickle.dump(self.history, f)
-        logger.info(f"Historia konwergencji zapisana do pliku: {filename}")
+        logger.info(f"Convergence history saved to: {filename}")
 
 
 @ray.remote
 class RefHolder:
     """
-    Lekki aktor służący tylko do dystrybucji referencji do aktualnego stanu.
-    Dzięki temu czytanie (Players) nie jest blokowane przez pisanie (GlobalStorage).
+    Lightweight Ray actor serving as a pointer to the latest global state snapshot.
+    This architecture prevents read operations (by Players) from being blocked
+    by write operations (in GlobalStorage).
     """
     def __init__(self):
-        self.current_ref = None
+        self.current_ref: Optional[Any] = None
 
-    def update_ref(self, ref_list):
-        """GlobalStorage wrzuca tu nową referencję."""
+    def update_ref(self, ref_list: List[Any]) -> None:
+        """Updates the current snapshot reference. Called by GlobalStorage."""
         self.current_ref = ref_list[0]
 
-    def get_ref(self):
-        """Gracze pobierają stąd referencję błyskawicznie."""
+    def get_ref(self) -> Any:
+        """Retrieves the latest snapshot reference. Called by Players."""
         return self.current_ref
 
 
