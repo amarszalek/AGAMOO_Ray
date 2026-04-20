@@ -1,6 +1,10 @@
 import numpy as np
 from agamoo_ray import Objective
 
+"""
+Real-world Engineering (RE) Problems Module.
+This module implements the RE suite (Tanabe & Ishibuchi).
+"""
 
 class RE21(Objective):
     def __init__(self, num, obj=1, args=None, verbose=False):

@@ -2,6 +2,19 @@ import numpy as np
 from agamoo_ray import Objective
 import time
 
+"""
+Time-Delayed Real-world Engineering (TRE) Problems Module.
+
+This module implements the RE suite (Tanabe & Ishibuchi) with injected artificial delays.
+Real-world engineering optimization tasks (e.g., Finite Element Analysis, CFD simulations) 
+often exhibit extreme computational asymmetry, where one objective function takes orders of 
+magnitude longer to evaluate than another. 
+
+To benchmark the asynchronous capabilities of the AGAMOO framework and prove the elimination 
+of CPU starvation (synchronization barriers), artificial delays (`time.sleep`) are injected 
+proportional to the population batch size (`x.shape[0]`).
+"""
+
 
 class RE21(Objective):
     def __init__(self, num, obj=1, args=None, verbose=False):
