@@ -10,7 +10,7 @@ with open("requirements.txt", "r") as reqs_file:
 
 setup(
     name="agamoo_ray",
-    version="0.0.1",
+    version="1.0.0",
     author="Adam Marszałek & Paweł Jarosz",
     author_email="adam.marszalek@pk.edu.pl",
     description="Asynchronous GAme theory based framework for MultiObjective Optimization in Python with Ray",
@@ -22,6 +22,7 @@ setup(
     classifiers=[
         "Programming Language :: Python :: 3.11",
         "License :: OSI Approved :: Apache Software License",
+        "Topic :: Scientific/Engineering",
     ],
     include_package_data=True,
     package_data={'': ['_cutils.so']},
