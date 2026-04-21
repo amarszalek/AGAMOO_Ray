@@ -26,7 +26,7 @@ class AGAMOO:
                  max_front: int,
                  max_front_tol: float = 0.0,
                  init_pop: str = 'separate',
-                 assing_gens: str = 'random',
+                 assign_gens: str = 'random',
                  front_f: Optional[Callable] = None,
                  verbose: bool = False,
                  log_freq: int = 0):
@@ -55,7 +55,7 @@ class AGAMOO:
         self.init_pop = init_pop
         self.front_f = front_f
         self.verbose = verbose
-        self.assing_gens = assing_gens
+        self.assign_gens = assign_gens
         self.log_freq = log_freq
 
         self.players: List[Any] = []
