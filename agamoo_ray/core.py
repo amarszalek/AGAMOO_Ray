@@ -336,7 +336,8 @@ class GlobalStorage:
         """Returns the current optimization status."""
         return {
             'iterations': self.iter_counters,
-            'evaluations': self.total_evaluations,
+            'total_evaluations': self.total_evaluations,
+            'evaluations': self.evaluations_count,
             'stop_flag': self.stop_flag,
             'front_size': len(self.front)
         }
