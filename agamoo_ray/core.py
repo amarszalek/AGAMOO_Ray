@@ -116,12 +116,14 @@ class AGAMOO:
         )
         return self.storage
 
-    def start_optimize(self, tqdm_disable: bool = False) -> None:
+    def start_optimize(self, tqdm_disable: bool = False, background: bool = False) -> None:
         """
         Starts the asynchronous optimization process and monitors the stop conditions.
 
         Args:
             tqdm_disable (bool): If True, disables the progress bar.
+            background (bool): If True, starts optimization in the background and returns
+                               immediately. If False, blocks until max_eval is reached.
         """
         if not self.players:
             raise ValueError("Players list is empty. Initialize players first.")
@@ -132,7 +134,7 @@ class AGAMOO:
         ray.get(self.storage.reset.remote())
 
         if self.verbose:
-            logger.info("Starting AGAMOO optimization using Ray...")
+            logger.info(f"Starting AGAMOO optimization ({'BACKGROUND' if background else 'BLOCKING'})...")
 
         # Start asynchronous player loops
         for p in self.players:
@@ -142,32 +144,61 @@ class AGAMOO:
         if self.verbose:
             logger.info("Players are running in the background...")
 
+        # Mode: Background execution
+        if background:
+            logger.info("Optimization is running in the background. Use model.stop() to terminate.")
+            return
+
         # Driver loop: Monitoring the global state via non-blocking RefHolder
-        with tqdm(total=self.max_eval, unit='eval', disable=tqdm_disable) as pbar:
-            while True:
-                ref = ray.get(self.ref_holder.get_ref.remote())
-                if ref is None:
-                    time.sleep(0.1)
-                    continue
+        try:
+            with tqdm(total=self.max_eval, unit='eval', disable=tqdm_disable) as pbar:
+                while True:
+                    ref = ray.get(self.ref_holder.get_ref.remote())
+                    if ref is None:
+                        time.sleep(0.1)
+                        continue
 
-                state = ray.get(ref)
-                current_evals = state.get('evaluations', 0)
-                stop_flag = state.get('stop_flag', False)
+                    state = ray.get(ref)
+                    current_evals = state.get('evaluations', 0)
+                    stop_flag = state.get('stop_flag', False)
 
-                pbar.n = min(current_evals, self.max_eval)
-                pbar.refresh()
+                    pbar.n = min(current_evals, self.max_eval)
+                    pbar.refresh()
 
-                if stop_flag:
-                    break
+                    if stop_flag:
+                        break
 
-                time.sleep(0.5)
+                    time.sleep(0.5)
+        except KeyboardInterrupt:
+            if self.verbose:
+                logger.info("Optimization interrupted by user (KeyboardInterrupt).")
+        finally:
+            # Automatic cleanup in blocking mode
+            if not background:
+                self.stop()
 
-        if self.verbose:
-            logger.info("Optimization finished.")
+    def stop(self) -> None:
+        """
+        Forcefully stops the optimization and terminates all Player actors.
+        """
+        if self.storage:
+            # Set stop flag in GlobalStorage so actors can exit gracefully if possible
+            ray.get(self.storage.force_stop.remote())
 
-        # Terminate player actors
-        for p in self.players:
-            ray.kill(p)
+            # Kill Ray actors to free resources
+            for p in self.players:
+                ray.kill(p)
+
+            if self.verbose:
+                logger.info("AGAMOO optimization stopped and resources cleared.")
+
+    def get_status(self) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the current status (evaluations, iterations, stop_flag) from storage.
+        """
+        if not self.storage:
+            return None
+        return ray.get(self.storage.get_status.remote())
 
     def get_results(self, key: Optional[str] = None) -> Any:
         """Retrieves the final optimization results from the global storage."""
@@ -294,6 +325,11 @@ class GlobalStorage:
         self.patterns = assigning_gens(self.nvars, self.nobjs)
         self.total_evaluations = 0
 
+        self._refresh_snapshot_ref()
+
+    def force_stop(self) -> None:
+        """Sets the internal stop flag to True."""
+        self.stop_flag = True
         self._refresh_snapshot_ref()
 
     def get_status(self) -> Dict[str, Any]:
