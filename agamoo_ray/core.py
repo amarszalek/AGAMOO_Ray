@@ -183,6 +183,20 @@ class AGAMOO:
 
         return ray.get(self.storage.get_results.remote())
 
+    def get_history(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Retrieves the full optimization history directly from the global storage.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries containing historical states,
+                                  or None if the storage is not initialized.
+        """
+        if not self.storage:
+            logger.warning("Storage not created. Cannot fetch history.")
+            return None
+
+        return ray.get(self.storage.get_history.remote())
+
 
 @ray.remote
 class GlobalStorage:
@@ -307,6 +321,13 @@ class GlobalStorage:
             'iter_counters': self.iter_counters,
             'evaluations': self.evaluations_count
         }
+
+    def get_history(self) -> List[Dict[str, Any]]:
+        """
+        Returns the in-memory optimization history recorded so far.
+        Useful for live tracking or notebook visualizations without saving to disk.
+        """
+        return self.history
 
     async def update(self, data: Dict[str, Any]) -> None:
         """
