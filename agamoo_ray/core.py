@@ -228,6 +228,32 @@ class AGAMOO:
 
         return ray.get(self.storage.get_history.remote())
 
+    def update_environment(self, reevaluate_front: bool = True, **kwargs) -> None:
+        """
+        Broadcasts new environment parameters to players and evaluators,
+        and then forces a re-evaluation of the points in the archive.
+        """
+        if self.verbose:
+            logger.info(f"Broadcasting environment update: {kwargs}")
+
+        # 1. Update all players (they operate independently in the background)
+        for p in self.players:
+            if hasattr(p, 'update_environment'):
+                p.update_environment.remote(**kwargs)
+
+        # 2. Update evaluators and WAIT for confirmation
+        # This is critical: Storage must use the updated evaluators to re-evaluate the archive
+        update_futures = []
+        for e in self.evaluators:
+            update_futures.append(e.update_environment.remote(**kwargs))
+
+        if update_futures:
+            ray.get(update_futures)  # Block for a fraction of a second until evaluators are updated
+
+        # 3. Dispatch archive re-evaluation (GlobalStorage will use the updated evaluators)
+        if reevaluate_front and self.storage:
+            ray.get(self.storage.reevaluate_archive.remote())
+
 
 @ray.remote
 class GlobalStorage:
@@ -504,6 +530,51 @@ class GlobalStorage:
         with open(filename, 'wb') as f:
             pickle.dump(self.history, f)
         logger.info(f"Convergence history saved to: {filename}")
+
+    async def reevaluate_archive(self) -> None:
+        """
+        Re-evaluates the current Pareto front for new environmental conditions (DMOP)
+        and discards dominated solutions.
+        """
+        if len(self.front) == 0:
+            return
+
+        if self.verbose:
+            logger.info("Starting asynchronous archive re-evaluation...")
+
+        futures = []
+        target_objs = []
+        num_workers = len(self.evaluators)
+
+        # Prepare a new matrix for updated objective function values
+        new_front_eval = np.zeros_like(self.front_eval)
+
+        # Dispatch re-evaluation of old X points for all objectives
+        for i in range(self.nobjs):
+            if num_workers > 0:
+                evaluator = self.evaluators[self.eval_rr_index % num_workers]
+                self.eval_rr_index += 1
+                futures.append(evaluator.evaluate.remote(self.front, i))
+                target_objs.append(i)
+
+        # Asynchronously gather new results
+        if futures:
+            import asyncio
+            results = await asyncio.gather(*futures)
+            for idx, res in enumerate(results):
+                obj_idx = target_objs[idx]
+                new_front_eval[:, obj_idx] = res
+
+        self.front_eval = new_front_eval
+
+        # Re-filtering - remove solutions that became dominated after the environment change
+        mask = get_not_dominated(self.front_eval)
+        self.front = self.front[mask]
+        self.front_eval = self.front_eval[mask]
+
+        self._refresh_snapshot_ref()
+        if self.verbose:
+            logger.info(f"Re-evaluation completed. New archive size: {len(self.front)}")
 
 
 @ray.remote

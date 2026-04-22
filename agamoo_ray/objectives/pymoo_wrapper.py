@@ -76,3 +76,13 @@ class ProblemPymoo(Objective):
 
         # Return only the column corresponding to this Player's objective
         return res[:, self.obj]
+
+    def update_env(self, **kwargs) -> None:
+        """
+        Updates the dynamic parameters of the encapsulated Pymoo problem.
+        """
+        for key, value in kwargs.items():
+            if hasattr(self.prob, key):
+                setattr(self.prob, key, value)
+            else:
+                self.prob.__dict__[key] = value

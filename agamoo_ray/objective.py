@@ -58,3 +58,14 @@ class Objective(ABC):
                 the evaluated objective values for each solution.
         """
         raise NotImplementedError('Subclasses must implement the evaluate() method.')
+
+    def update_env(self, **kwargs) -> None:
+        """
+        Updates the dynamic parameters of the problem (e.g., time 'tau' for FDA problems).
+        """
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                # Force update for custom dynamic properties
+                self.__dict__[key] = value
