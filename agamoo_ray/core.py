@@ -542,19 +542,21 @@ class GlobalStorage:
         if self.verbose:
             logger.info("Starting asynchronous archive re-evaluation...")
 
+        snapshot_front = self.front.copy()
+
         futures = []
         target_objs = []
         num_workers = len(self.evaluators)
 
         # Prepare a new matrix for updated objective function values
-        new_front_eval = np.zeros_like(self.front_eval)
+        new_front_eval = np.zeros((len(snapshot_front), self.nobjs))
 
         # Dispatch re-evaluation of old X points for all objectives
         for i in range(self.nobjs):
             if num_workers > 0:
                 evaluator = self.evaluators[self.eval_rr_index % num_workers]
                 self.eval_rr_index += 1
-                futures.append(evaluator.evaluate.remote(self.front, i))
+                futures.append(evaluator.evaluate.remote(snapshot_front, i))
                 target_objs.append(i)
 
         # Asynchronously gather new results
@@ -565,12 +567,13 @@ class GlobalStorage:
                 obj_idx = target_objs[idx]
                 new_front_eval[:, obj_idx] = res
 
-        self.front_eval = new_front_eval
-
         # Re-filtering - remove solutions that became dominated after the environment change
-        mask = get_not_dominated(self.front_eval)
-        self.front = self.front[mask]
-        self.front_eval = self.front_eval[mask]
+        mask = get_not_dominated(new_front_eval)
+        filtered_front = snapshot_front[mask]
+        filtered_front_eval = new_front_eval[mask]
+
+        self.front = filtered_front
+        self.front_eval = filtered_front_eval
 
         self._refresh_snapshot_ref()
         if self.verbose:
