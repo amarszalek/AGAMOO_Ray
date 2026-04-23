@@ -548,7 +548,7 @@ class GlobalStorage:
             pickle.dump(self.history, f)
         logger.info(f"Convergence history saved to: {filename}")
 
-    async def reevaluate_archive(self, env_version: int = 0, env_params: Dict[str:Any] = {}) -> None:
+    async def reevaluate_archive(self, env_version: int = 0, env_params: Dict[str, Any] = {}) -> None:
         """
         Re-evaluates the current Pareto front for new environmental conditions (DMOP)
         and discards dominated solutions.
