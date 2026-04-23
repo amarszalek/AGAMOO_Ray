@@ -79,7 +79,7 @@ class Player(ABC):
         self.storage = storage
         self.ref_holder = ref_holder
 
-    async def start(self) -> None:
+    def start(self) -> None:
         """
         Main execution loop of the player. When deployed via Ray, this runs
         continuously inside the Actor's dedicated process, enabling true asynchronous
@@ -125,6 +125,11 @@ class Player(ABC):
                     continue
 
                 global_state = ray.get(snapshot_ref)
+
+                if global_state['env_version'] != self.env_version:
+                    params = global_state['env_params']
+                    params['env_version'] = global_state['env_version']
+                    self.update_environment(**params)
 
                 # Check for termination signal
                 if global_state['stop_flag']:
@@ -267,7 +272,6 @@ class Player(ABC):
                     # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
 
-                await asyncio.sleep(0.01)
 
         except Exception as e:
             logger.error(f"Player {self.num} crashed: {e}", exc_info=True)

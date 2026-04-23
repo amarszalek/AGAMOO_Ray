@@ -239,12 +239,13 @@ class AGAMOO:
             logger.info(f"Broadcasting environment update: {kwargs}")
 
         self.env_version += 1
+        env_params = kwargs.copy()
         kwargs['env_version'] = self.env_version
 
         # 1. Update all players (they operate independently in the background)
-        for p in self.players:
-            if hasattr(p, 'update_environment'):
-                p.update_environment.remote(**kwargs)
+        #for p in self.players:
+        #    if hasattr(p, 'update_environment'):
+        #       p.update_environment.remote(**kwargs)
 
         # 2. Update evaluators and WAIT for confirmation
         # This is critical: Storage must use the updated evaluators to re-evaluate the archive
@@ -257,7 +258,7 @@ class AGAMOO:
 
         # 3. Dispatch archive re-evaluation (GlobalStorage will use the updated evaluators)
         if reevaluate_front and self.storage:
-            ray.get(self.storage.reevaluate_archive.remote(env_version=self.env_version))
+            ray.get(self.storage.reevaluate_archive.remote(env_version=self.env_version, env_params=env_params))
 
 
 @ray.remote
@@ -291,6 +292,7 @@ class GlobalStorage:
         self.front_f = front_f
 
         self.current_env_version = 0
+        self.current_env_params = {}
 
         self.players_handles: List[Any] = []
         self.evaluators: List[Any] = []
@@ -332,7 +334,9 @@ class GlobalStorage:
             'patterns': self.patterns,
             'next_iter': self.next_iter,
             'stop_flag': self.stop_flag,
-            'evaluations': self.total_evaluations
+            'evaluations': self.total_evaluations,
+            'env_version': self.current_env_version,
+            'env_params': self.current_env_params
         }
         # ray.put stores data in shared memory and returns a lightweight ObjectRef
         ref = ray.put(snapshot_data)
@@ -525,7 +529,9 @@ class GlobalStorage:
             "nfe_array": self.evaluations_count.copy(),
             "nfe_total": np.sum(self.evaluations_count),
             "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([]),
-            "patterns": deepcopy(self.lpatterns)
+            "patterns": deepcopy(self.lpatterns),
+            "env_version": self.current_env_version,
+            "env_params": self.current_env_params
         }
 
         self.history.append(log_entry)
@@ -542,13 +548,16 @@ class GlobalStorage:
             pickle.dump(self.history, f)
         logger.info(f"Convergence history saved to: {filename}")
 
-    async def reevaluate_archive(self, env_version: int = 0) -> None:
+    async def reevaluate_archive(self, env_version: int = 0, env_params: Dict[str:Any] = {}) -> None:
         """
         Re-evaluates the current Pareto front for new environmental conditions (DMOP)
         and discards dominated solutions.
         """
 
         self.current_env_version = env_version
+        self.current_env_params = env_params
+
+        self._refresh_snapshot_ref()
 
         if len(self.front) == 0:
             return
