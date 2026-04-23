@@ -62,7 +62,38 @@ def pairwise_distance(x: np.ndarray) -> np.ndarray:
     return np.linalg.norm(x[:, None, :] - x[None, :, :], axis=-1)
 
 
-def front_suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
+def front_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int, mode: str = 'objectives') -> np.ndarray:
+    """
+    Reduces the size of the Pareto front to a specified maximum while maintaining
+    diversity using a 'crowding' distance heuristic.
+
+    Args:
+        front (np.ndarray): The current Pareto front (solutions).
+        front_eval (np.ndarray): The current Pareto front evaluations.
+        front_max (int): The maximum allowed size of the front.
+        mode (str): Type of suppression ('objectives', 'variables', 'dual_fast' or 'dual_omni').
+
+    Returns:
+        np.ndarray: Boolean mask of individuals kept in the suppressed front.
+    """
+
+    if mode == 'objectives':
+        return _suppression(front_eval, front_max)
+    elif mode == 'variables':
+        return _suppression(front, front_max)
+    elif mode == 'dual_fast':
+        if np.random.random()< 0.5:
+            mask = _suppression(front_eval, front_max)
+        else:
+            mask = _suppression(front, front_max)
+        return mask
+    elif mode == 'dual_omni':
+        return _dual_omni_suppression(front, front_eval, front_max)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
+
+def _suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
     """
     Reduces the size of the Pareto front to a specified maximum while maintaining
     diversity using a 'crowding' distance heuristic.
@@ -74,6 +105,7 @@ def front_suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
     Returns:
         np.ndarray: Boolean mask of individuals kept in the suppressed front.
     """
+
     if CEXT:
         mask = np.zeros(front_eval.shape[0], dtype=np.int32)
         cutils.cfront_suppression(front_eval, front_max, mask)
@@ -88,8 +120,8 @@ def front_suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
     ideal = np.argmin(front_eval, axis=0)
 
     # Normalize front for fair distance calculation
-    front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0))+1.0
-    front_eval_norm = front_eval_norm/np.max(front_eval_norm, axis=0)
+    front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0)) + 1.0
+    front_eval_norm = front_eval_norm / np.max(front_eval_norm, axis=0)
 
     z = pairwise_distance(front_eval_norm)
     mask = np.ones(front_eval.shape[0], dtype=bool)
@@ -105,17 +137,87 @@ def front_suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
         mask[ii] = False
 
         # Remove dependencies of the deleted point from the distance matrix indices
-        tmp = indx_i[indx_i!=ii]
-        indx_j = indx_j[indx_i!=ii]
+        tmp = indx_i[indx_i != ii]
+        indx_j = indx_j[indx_i != ii]
         indx_i = tmp.copy()
 
-        tmp = indx_j[indx_j!=ii]
-        indx_i = indx_i[indx_j!=ii]
+        tmp = indx_j[indx_j != ii]
+        indx_i = indx_i[indx_j != ii]
         indx_j = tmp.copy()
 
-        n=n-1
+        n = n - 1
 
     # Re-enable the boundary (ideal) points explicitly
+    for i in ideal:
+        mask[i] = True
+
+    return mask
+
+
+def _dual_omni_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int) -> np.ndarray:
+    """
+    Reduces the size of the Pareto front to a specified maximum while maintaining
+    diversity in BOTH objective (F) and decision variable (X) spaces.
+    Uses optimized pairwise distance matrices calculated only once.
+
+    Args:
+        front (np.ndarray): The current Pareto front variables (X).
+        front_eval (np.ndarray): The current Pareto front evaluations (F).
+        front_max (int): The maximum allowed size of the front.
+
+    Returns:
+        np.ndarray: Boolean mask of individuals kept in the suppressed front.
+    """
+    n = front_eval.shape[0] - front_max
+    if n <= 0:
+        return np.ones(front_eval.shape[0], dtype=bool)
+
+    # 1. Zabezpieczenie ekstremów (punktów idealnych) w obu przestrzeniach!
+    ideal_f = np.argmin(front_eval, axis=0)
+    ideal_x = np.argmin(front, axis=0)
+    ideal = np.unique(np.concatenate((ideal_f, ideal_x)))
+
+    # 2. Normalizacja przestrzeni celów (F)
+    front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0)) + 1.0
+    front_eval_norm = front_eval_norm / np.max(front_eval_norm, axis=0)
+
+    # 3. Normalizacja przestrzeni zmiennych (X)
+    front_norm = front + np.abs(np.min(front, axis=0)) + 1.0
+    front_norm = front_norm / np.max(front_norm, axis=0)
+
+    # 4. Obliczenie macierzy odległości dla par (tylko RAZ)
+    z_f = pairwise_distance(front_eval_norm)
+    z_x = pairwise_distance(front_norm)
+
+    # 5. FUZJA DUALNA (Serce Omni-Optimizera)
+    # Odległość dualna to MAKSIMUM z odległości F i X.
+    # Jeśli punkty są blisko w F, ale daleko w X, Z_dual będzie duże -> przetrwają.
+    z_dual = np.maximum(z_f, z_x)
+
+    mask = np.ones(front_eval.shape[0], dtype=bool)
+
+    # Ignorujemy górny trójkąt i przekątną macierzy odległości
+    t = np.tril(z_dual) + np.triu(np.ones_like(z_dual) * 1000000)
+    arg = np.argsort(t, axis=None)
+    indx_i, indx_j = np.unravel_index(arg, t.shape)
+
+    # 6. Błyskawiczne, iteracyjne usuwanie bez ponownego mnożenia macierzy
+    while n > 0:
+        ii = indx_i[0]
+        mask[ii] = False
+
+        # Usuwamy usunięty punkt ze spisu posortowanych odległości
+        tmp = indx_i[indx_i != ii]
+        indx_j = indx_j[indx_i != ii]
+        indx_i = tmp.copy()
+
+        tmp = indx_j[indx_j != ii]
+        indx_i = indx_i[indx_j != ii]
+        indx_j = tmp.copy()
+
+        n -= 1
+
+    # Przywrócenie punktów ekstremalnych
     for i in ideal:
         mask[i] = True
 

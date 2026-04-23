@@ -28,6 +28,7 @@ class AGAMOO:
                  init_pop: str = 'separate',
                  assign_gens: str = 'random',
                  front_f: Optional[Callable] = None,
+                 sup_mode: str = 'objectives',
                  verbose: bool = False,
                  log_freq: int = 0):
 
@@ -57,6 +58,7 @@ class AGAMOO:
         self.verbose = verbose
         self.assign_gens = assign_gens
         self.log_freq = log_freq
+        self.sup_mode = sup_mode
 
         self.env_version = 0
 
@@ -113,7 +115,7 @@ class AGAMOO:
 
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
-            self.max_front, self.assign_gens, self.max_front_tol, self.front_f,
+            self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.storage,
             ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq,
         )
         return self.storage
@@ -278,6 +280,7 @@ class GlobalStorage:
                  assign_gens: str = 'random',
                  max_front_tol: float = 0.0,
                  front_f: Optional[Callable] = None,
+                 sup_mode: str = 'objectives',
                  verbose: bool = False,
                  ref_holder: Optional[Any] = None,
                  log_freq=0):
@@ -290,6 +293,7 @@ class GlobalStorage:
         self.max_front = max_front
         self.max_front_tol = max_front_tol
         self.front_f = front_f
+        self.sup_mode = sup_mode
 
         self.current_env_version = 0
         self.current_env_params = {}
@@ -385,7 +389,7 @@ class GlobalStorage:
         final_front_eval = self.front_eval
 
         if len(final_front) > self.max_front:
-            mask = front_suppression(final_front_eval, self.max_front)
+            mask = front_suppression(final_front, final_front_eval, self.max_front, mode=self.sup_mode)
             final_front = final_front[mask]
             final_front_eval = final_front_eval[mask]
 
@@ -501,7 +505,7 @@ class GlobalStorage:
             limit = int(self.max_front * (1.0 + self.max_front_tol)) if self.max_front_tol > 0 else self.max_front
 
             if len(self.front) > limit:
-                mask = front_suppression(self.front_eval, self.max_front)
+                mask = front_suppression(self.front, self.front_eval, self.max_front, mode=self.sup_mode)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 

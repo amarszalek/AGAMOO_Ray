@@ -186,7 +186,7 @@ class Player(ABC):
                         # Apply distance suppression to maintain diversity during exchange
                         target_size = int(pop.shape[0] * (proc / 100))
                         if target_size < local_front.shape[0]:
-                            mask = front_suppression(local_front_eval, target_size)
+                            mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
@@ -220,7 +220,7 @@ class Player(ABC):
 
                         nn = (pop.shape[0] - limit_idx)
                         if nn < local_front.shape[0]:
-                            mask = front_suppression(local_front_eval, nn)
+                            mask = front_suppression(local_front, local_front_eval, nn, mode='objectives')
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
