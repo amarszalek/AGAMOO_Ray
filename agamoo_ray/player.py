@@ -55,6 +55,8 @@ class Player(ABC):
         self.repair = DefaultRepair()
         self.init_pop = init_pop
 
+        self.env_version = 0
+
         self.ref_holder: Optional[Any] = None
 
         self.iteration: int = 0
@@ -248,7 +250,7 @@ class Player(ABC):
                         'evaluation_counter': self.evaluation_counter,  # diff since last update
                         'iteration': self.iteration,
                         'iter_flag': False
-                    })
+                    }, env_version=self.env_version)
                     if self.verbose:
                         logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
 
@@ -260,7 +262,7 @@ class Player(ABC):
                         'nobj': obj_idx,
                         'iter_flag': True,
                         'iteration': self.iteration
-                    })
+                    }, env_version=self.env_version)
                     # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
 
@@ -296,6 +298,10 @@ class Player(ABC):
 
     def update_environment(self, **kwargs) -> None:
         """Asynchronously updates the player's environment."""
+
+        if 'env_version' in kwargs:
+            self.env_version = kwargs.pop('env_version')
+
         if hasattr(self.objective, 'update_env'):
             self.objective.update_env(**kwargs)
 

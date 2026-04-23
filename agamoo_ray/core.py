@@ -58,6 +58,8 @@ class AGAMOO:
         self.assign_gens = assign_gens
         self.log_freq = log_freq
 
+        self.env_version = 0
+
         self.players: List[Any] = []
         self.evaluators: List[Any] = []
         self.storage: Optional[Any] = None
@@ -236,6 +238,9 @@ class AGAMOO:
         if self.verbose:
             logger.info(f"Broadcasting environment update: {kwargs}")
 
+        self.env_version += 1
+        kwargs['env_version'] = self.env_version
+
         # 1. Update all players (they operate independently in the background)
         for p in self.players:
             if hasattr(p, 'update_environment'):
@@ -252,7 +257,7 @@ class AGAMOO:
 
         # 3. Dispatch archive re-evaluation (GlobalStorage will use the updated evaluators)
         if reevaluate_front and self.storage:
-            ray.get(self.storage.reevaluate_archive.remote())
+            ray.get(self.storage.reevaluate_archive.remote(env_version=self.env_version))
 
 
 @ray.remote
@@ -284,6 +289,8 @@ class GlobalStorage:
         self.max_front = max_front
         self.max_front_tol = max_front_tol
         self.front_f = front_f
+
+        self.current_env_version = 0
 
         self.players_handles: List[Any] = []
         self.evaluators: List[Any] = []
@@ -392,11 +399,12 @@ class GlobalStorage:
         """
         return self.history
 
-    async def update(self, data: Dict[str, Any]) -> None:
+    async def update(self, data: Dict[str, Any], env_version: int = 0) -> None:
         """
         Main asynchronous method handling updates from Player actors.
         Updates the global Pareto archive and evaluates missing criteria.
         """
+
         try:
             nobj = data['nobj']
             iteration = data.get('iteration', 0)
@@ -421,6 +429,9 @@ class GlobalStorage:
 
             # Return early if it's just a heartbeat
             if data.get('iter_flag', False):
+                return
+
+            if env_version < self.current_env_version:
                 return
 
             # Extract population data
@@ -531,11 +542,14 @@ class GlobalStorage:
             pickle.dump(self.history, f)
         logger.info(f"Convergence history saved to: {filename}")
 
-    async def reevaluate_archive(self) -> None:
+    async def reevaluate_archive(self, env_version: int = 0) -> None:
         """
         Re-evaluates the current Pareto front for new environmental conditions (DMOP)
         and discards dominated solutions.
         """
+
+        self.current_env_version = env_version
+
         if len(self.front) == 0:
             return
 
