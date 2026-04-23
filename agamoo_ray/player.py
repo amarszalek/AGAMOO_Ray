@@ -332,6 +332,7 @@ class Evaluator:
             objectives (List[Objective]): List of Objective instances to evaluate against.
         """
         self.objectives = objectives
+        self.env_version = 0
 
     def evaluate(self, pop: np.ndarray, i: int) -> np.ndarray:
         """
@@ -349,6 +350,10 @@ class Evaluator:
 
     def update_environment(self, **kwargs) -> None:
         """Asynchronously updates the evaluator's environment."""
+
+        if 'env_version' in kwargs:
+            self.env_version = kwargs.pop('env_version')
+
         for obj in self.objectives:
             if hasattr(obj, 'update_env'):
                 obj.update_env(**kwargs)
