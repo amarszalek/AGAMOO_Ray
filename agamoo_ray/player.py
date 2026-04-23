@@ -3,6 +3,7 @@ import time
 import ray
 import traceback
 import logging
+import asyncio
 
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional, List
@@ -78,7 +79,7 @@ class Player(ABC):
         self.storage = storage
         self.ref_holder = ref_holder
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """
         Main execution loop of the player. When deployed via Ray, this runs
         continuously inside the Actor's dedicated process, enabling true asynchronous
@@ -265,6 +266,8 @@ class Player(ABC):
                     }, env_version=self.env_version)
                     # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
+
+                await asyncio.sleep(0.01)
 
         except Exception as e:
             logger.error(f"Player {self.num} crashed: {e}", exc_info=True)
