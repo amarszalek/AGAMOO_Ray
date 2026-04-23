@@ -115,7 +115,7 @@ class AGAMOO:
 
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
-            self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.storage,
+            self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
             ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq,
         )
         return self.storage
