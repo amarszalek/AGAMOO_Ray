@@ -264,11 +264,11 @@ class Player(ABC):
                     iters_pop = iters.copy()
                 else:
                     # Heartbeat update (only iteration info)
-                    ray.get(self.storage.update.remote({
+                    self.storage.update.remote({
                         'nobj': obj_idx,
                         'iter_flag': True,
                         'iteration': self.iteration
-                    }, env_version=self.env_version))
+                    }, env_version=self.env_version)
                     # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
 
