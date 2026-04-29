@@ -7,7 +7,8 @@ import traceback
 import pickle
 from copy import deepcopy
 from tqdm.auto import tqdm
-from agamoo_ray.utils import get_not_dominated, front_suppression, assigning_gens, adaptive_linear_assigning_gens
+from agamoo_ray.utils import get_not_dominated, front_suppression
+from agamoo_ray.utils import assigning_gens, adaptive_linear_assigning_gens, adaptive_shap_assigning_gens
 from typing import List, Dict, Any, Optional, Callable, Union
 
 
@@ -429,6 +430,8 @@ class GlobalStorage:
                     self.patterns = assigning_gens(self.nvars, self.nobjs)
                 elif self.assign_gens=='adaptive_linear':
                     self.patterns = adaptive_linear_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
+                elif self.assign_gens=='adaptive_shap':
+                    self.patterns = adaptive_shap_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
                 else:
                     raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
                 self.min_iter_pop = min_iter

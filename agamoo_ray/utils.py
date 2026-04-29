@@ -1,6 +1,8 @@
 import numpy as np
 import logging
 from typing import Tuple
+import shap
+from sklearn.ensemble import RandomForestRegressor
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +307,73 @@ def adaptive_linear_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nv
     significant_mask = corr_matrix.T >= dynamic_threshold
 
     # Merge the random base with the statistical knowledge
+    patterns = np.logical_or(patterns, significant_mask)
+
+    return patterns
+
+
+def adaptive_shap_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nvars: int, nobjs: int) -> np.ndarray:
+    """
+    Adaptive variable allocation mechanism driven by SHAP (Explainable AI).
+
+    1. Random Base Allocation: Guarantees full dimensional coverage to prevent 'orphan' genes.
+    2. Surrogate Modeling: Trains a fast Random Forest for each objective based on the current Pareto front.
+    3. SHAP Knowledge Extraction: Uses TreeSHAP to calculate the non-linear, interaction-aware
+       importance of every decision variable.
+    4. Knowledge Injection: Assigns the most influential variables to their respective players.
+
+    Args:
+        front (np.ndarray): Current decision variable space of the Pareto front.
+        front_eval (np.ndarray): Current objective space of the Pareto front.
+        nvars (int): Number of decision variables.
+        nobjs (int): Number of objective functions.
+
+    Returns:
+        np.ndarray: Boolean matrix of shape (nobjs, nvars) indicating the adaptive assignment.
+    """
+    # Random Base (Protection against 'orphan' genes)
+    patterns = assigning_gens(nvars, nobjs)
+
+    # SHAP requires a meaningful statistical sample to train the model.
+    # If the archive has fewer than 20 points, return the random allocation.
+    if len(front) < 20:
+        return patterns
+
+    shap_matrix = np.zeros((nvars, nobjs))
+
+    # Surrogate Modeling and SHAP Explanation
+    for j in range(nobjs):
+        obj_data = front_eval[:, j]
+
+        # Protection against degenerate data (zero variance)
+        if np.std(obj_data) < 1e-6:
+            continue
+
+        # Train a fast Random Forest predicting the objective value based on genes (X)
+        model = RandomForestRegressor(n_estimators=30, max_depth=5, n_jobs=1, random_state=42)
+        model.fit(front, obj_data)
+
+        # Use TreeExplainer, which is highly optimized and fast for tree-based models
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(front)
+
+        # shap_values is a matrix of shape (num_points, nvars).
+        # To get the 'global' feature importance, we take the mean of absolute values across all points.
+        global_shap_importance = np.mean(np.abs(shap_values), axis=0)
+        shap_matrix[:, j] = global_shap_importance
+
+    # Knowledge Injection
+    # Find the SHAP importance threshold for the entire matrix
+    mean_shap = np.mean(shap_matrix)
+    std_shap = np.std(shap_matrix)
+
+    # Dynamic threshold (μ + σ)
+    dynamic_threshold = mean_shap + std_shap
+
+    # Transpose the matrix to match (nobjs, nvars) shape and create a boolean mask
+    significant_mask = shap_matrix.T >= dynamic_threshold
+
+    # Merge the significant SHAP insights with the random base (Logical OR)
     patterns = np.logical_or(patterns, significant_mask)
 
     return patterns
