@@ -423,6 +423,13 @@ class GlobalStorage:
 
             self.iter_counters[nobj] = iteration
 
+            # Return early if it's just a heartbeat
+            if data.get('iter_flag', False):
+                return
+
+            if env_version < self.current_env_version:
+                return
+
             # Dynamic Variable Assignment logic
             min_iter = np.min(self.iter_counters)
             if min_iter - self.min_iter_pop >= self.change_iter:
@@ -437,13 +444,6 @@ class GlobalStorage:
                 self.min_iter_pop = min_iter
 
             self.lpatterns.append(self.patterns.copy())
-
-            # Return early if it's just a heartbeat
-            if data.get('iter_flag', False):
-                return
-
-            if env_version < self.current_env_version:
-                return
 
             # Extract population data
             pop = data['population']
