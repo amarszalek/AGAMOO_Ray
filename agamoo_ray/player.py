@@ -249,14 +249,14 @@ class Player(ABC):
                 # 3. Global Storage Update Dispatch
                 # Transmit full payload if other players have progressed, else send a lightweight heartbeat
                 if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
-                    self.storage.update.remote({
+                    ray.get(self.storage.update.remote({
                         'nobj': obj_idx,
                         'population': pop.copy(),
                         'population_eval': pop_eval.copy(),
                         'evaluation_counter': self.evaluation_counter,  # diff since last update
                         'iteration': self.iteration,
                         'iter_flag': False
-                    }, env_version=self.env_version)
+                    }, env_version=self.env_version))
                     if self.verbose:
                         logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
 
@@ -264,11 +264,11 @@ class Player(ABC):
                     iters_pop = iters.copy()
                 else:
                     # Heartbeat update (only iteration info)
-                    self.storage.update.remote({
+                    ray.get(self.storage.update.remote({
                         'nobj': obj_idx,
                         'iter_flag': True,
                         'iteration': self.iteration
-                    }, env_version=self.env_version)
+                    }, env_version=self.env_version))
                     # Yield execution briefly to avoid hammering the object store
                     time.sleep(0.001)
 
