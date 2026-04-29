@@ -3,6 +3,7 @@ import logging
 from typing import Tuple
 import shap
 from sklearn.ensemble import RandomForestRegressor
+import lightgbm as lgb
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +351,19 @@ def adaptive_shap_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nvar
             continue
 
         # Train a fast Random Forest predicting the objective value based on genes (X)
-        model = RandomForestRegressor(n_estimators=30, max_depth=5)
+        # model = RandomForestRegressor(n_estimators=20, max_depth=3, n_jobs=1)
+
+        # Ultra-fast LightGBM setup tuned for Low-Latency surrogate modeling
+        model = lgb.LGBMRegressor(
+            n_estimators=20,
+            max_depth=3,
+            num_leaves=7,
+            learning_rate=0.1,
+            n_jobs=1,
+            verbose=-1,
+            min_child_samples=5
+        )
+
         model.fit(front, obj_data)
 
         # Use TreeExplainer, which is highly optimized and fast for tree-based models

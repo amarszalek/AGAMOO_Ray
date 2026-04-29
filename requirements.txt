@@ -4,3 +4,4 @@ tqdm>=4.67.1
 pymoo
 shap
 scikit-learn
+lightgbm
