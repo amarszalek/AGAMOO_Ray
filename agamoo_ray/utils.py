@@ -350,7 +350,7 @@ def adaptive_shap_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nvar
             continue
 
         # Train a fast Random Forest predicting the objective value based on genes (X)
-        model = RandomForestRegressor(n_estimators=30, max_depth=5, n_jobs=1, random_state=42)
+        model = RandomForestRegressor(n_estimators=30, max_depth=5)
         model.fit(front, obj_data)
 
         # Use TreeExplainer, which is highly optimized and fast for tree-based models
