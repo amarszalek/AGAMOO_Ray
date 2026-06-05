@@ -425,6 +425,7 @@ class GlobalStorage:
 
             # Return early if it's just a heartbeat
             if data.get('iter_flag', False):
+                self._refresh_snapshot_ref()
                 return
 
             if env_version < self.current_env_version:
