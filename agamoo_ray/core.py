@@ -495,6 +495,10 @@ class GlobalStorage:
                 self.front = np.vstack([self.front, pop])
                 self.front_eval = np.vstack([self.front_eval, pop_eval])
 
+            _, unique_indices = np.unique(self.front, axis=0, return_index=True)
+            self.front = self.front[unique_indices]
+            self.front_eval = self.front_eval[unique_indices]
+
             # Non-dominated selection
             if len(self.front) > 1:
                 mask = get_not_dominated(self.front_eval)
