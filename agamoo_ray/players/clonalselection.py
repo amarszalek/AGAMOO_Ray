@@ -98,7 +98,8 @@ class ClonalSelection(Player):
                 denom = nadir - ideal
                 denom[denom < 1e-9] = 1e-9
                 w = np.random.uniform(0.01, 1.0, front_eval.shape[1])
-                w[self.objective.obj] = np.max(w) + np.random.uniform(0.2, 0.5)
+                w = w / np.sum(w)
+                w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
                 w = w / np.linalg.norm(w)
 
                 theta = 5.0
