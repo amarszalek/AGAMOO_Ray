@@ -49,7 +49,7 @@ class ClonalSelection(Player):
         self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
-        self.scalar_freq: int = player_param.get('scalar_freq', 5)
+        self.scalar_freq: int = player_param.get('scalar_freq', 0)
 
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
@@ -98,8 +98,8 @@ class ClonalSelection(Player):
                 denom = nadir - ideal
                 denom[denom < 1e-9] = 1e-9
                 w = np.random.uniform(0.01, 1.0, front_eval.shape[1])
-                w = w / np.sum(w)
-                w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
+                #w = w / np.sum(w)
+                #w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
                 w = w / np.linalg.norm(w)
 
                 theta = 5.0
