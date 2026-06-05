@@ -99,21 +99,36 @@ class ClonalSelection(Player):
                 denom[denom < 1e-9] = 1e-9
                 w = np.random.uniform(0.01, 1.0, front_eval.shape[1])
                 w[self.objective.obj] = np.max(w) + np.random.uniform(0.2, 0.5)
-                w = w / np.sum(w)
+                w = w / np.linalg.norm(w)
 
-                # Funkcja pomocnicza: Estymuje oceny na podstawie najbliższego sąsiada
-                def calc_tchebycheff(x_array, exact_evals):
+                theta = 5.0
+
+                # Funkcja pomocnicza: Estymacja sąsiada + Obliczenie PBI
+                def calc_pbi(x_array, exact_evals):
+                    # Szukanie najbliższego sąsiada w przestrzeni X
                     diff = x_array[:, np.newaxis, :] - front[np.newaxis, :, :]
                     dist_sq = np.sum(diff ** 2, axis=2)
                     nearest_idx = np.argmin(dist_sq, axis=1)
 
+                    # Estymacja ocen wszystkich kryteriów i podmiana znanej wartości
                     est_evals = front_eval[nearest_idx].copy()
                     est_evals[:, self.objective.obj] = exact_evals
 
-                    return np.max(w * np.abs(est_evals - ideal) / denom, axis=1)
+                    # Normalizacja wyników do przedziału [0, 1]
+                    F_norm = (est_evals - ideal) / denom
 
-                parent_tch = calc_tchebycheff(temp_pop, temp_pop_eval)
-                arg_sort = parent_tch.argsort()
+                    # Obliczanie d1 (Zbieżność) - iloczyn skalarny wektora wyniku z wektorem wag
+                    d1 = np.dot(F_norm, w)
+
+                    # Obliczanie d2 (Różnorodność) - odległość prostopadła (błąd odchylenia od wektora)
+                    projection = d1[:, np.newaxis] * w
+                    d2 = np.linalg.norm(F_norm - projection, axis=1)
+
+                    # Ostateczny wynik PBI
+                    return d1 + (theta * d2)
+
+                parent_scalar = calc_pbi(temp_pop, temp_pop_eval)
+                arg_sort = parent_scalar.argsort()
 
         # Sort population to determine affinity (lower evaluation = better rank)
         if not use_scalarization:
@@ -156,8 +171,8 @@ class ClonalSelection(Player):
                 all_clones_eval = np.append(all_clones_eval, temp_pop_eval)
                 # Select the absolute best individuals to form the new population
                 if use_scalarization:
-                    all_tch = calc_tchebycheff(all_clones, all_clones_eval)
-                    final_sort = all_tch.argsort()
+                    all_scalar = calc_pbi(all_clones, all_clones_eval)
+                    final_sort = all_scalar.argsort()
                 else:
                     final_sort = all_clones_eval.argsort()
                 temp_pop[:, :] = all_clones[final_sort[:temp_pop.shape[0]], :]
@@ -178,9 +193,9 @@ class ClonalSelection(Player):
                     evaluation_counter += clones.shape[0]
                     # Find the best clone among the generated batch
                     if use_scalarization:
-                        tch_c = calc_tchebycheff(clones, clones_eval)
-                        argmin = tch_c.argmin()
-                        if tch_c[argmin] < parent_tch[arg]:
+                        scalar_c = calc_pbi(clones, clones_eval)
+                        argmin = scalar_c.argmin()
+                        if scalar_c[argmin] < parent_scalar[arg]:
                             indices.append(arg)
                             better.append(clones[argmin])
                             better_eval.append(clones_eval[argmin])
@@ -199,7 +214,7 @@ class ClonalSelection(Player):
         d = int(pop.shape[0] * self.sup)
         if d > 0:
             if use_scalarization:
-                inds = parent_tch.argsort()[-d:]  # Najgorsi trafiają do kasacji
+                inds = parent_scalar.argsort()[-d:]  # Najgorsi trafiają do kasacji
             else:
                 inds = temp_pop_eval.argsort()[-d:]
 
