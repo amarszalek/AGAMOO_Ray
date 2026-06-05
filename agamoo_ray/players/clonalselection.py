@@ -49,6 +49,7 @@ class ClonalSelection(Player):
         self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
+        self.scalar_freq: int = player_param.get('scalar_freq', 5)
 
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
@@ -85,7 +86,7 @@ class ClonalSelection(Player):
             # self.objective.obj to indeks przypisany do tego gracza (np. 0, 1, 2...)
             current_iter = int(global_state['iter_counters'][self.objective.obj])
 
-        if global_state is not None and len(global_state.get('front', [])) > 5:
+        if global_state is not None and len(global_state.get('front', [])) > 5 and self.scalar_freq > 0 :
             if current_iter > 0 and current_iter % 5 == 0:
                 use_scalarization = True
                 front = global_state['front']
