@@ -313,6 +313,80 @@ def adaptive_linear_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nv
     return patterns
 
 
+def adaptive_sparsity_gens(front, front_eval, nvars, nobjs):
+    """
+    Inteligentny przydział genów (Robin Hood DVA).
+    Odbiera geny algorytmom z dobrymi wynikami i oddaje tym, które utknęły,
+    wymuszając przeskakiwanie między lokalnymi minimami.
+    """
+
+    # Zabezpieczenie: jeśli front jest za mały do statystyki, zwracamy losowy przydział
+    if len(front) < 20:
+        return assigning_gens(nvars, nobjs)
+
+    # --- ETAP 1: Obliczenie 'Potrzeby' (Need) dla każdego kryterium ---
+    ideal = np.min(front_eval, axis=0)
+    nadir = np.max(front_eval, axis=0)
+
+    # Unikamy dzielenia przez zero (jeśli front zapadł się do jednego punktu)
+    denom = nadir - ideal
+    denom[denom < 1e-9] = 1e-9
+
+    # Normalizacja wyników do przedziału [0, 1]
+    F_norm = (front_eval - ideal) / denom
+
+    # Wyznaczamy potrzebę.
+    # mean_perf: im wyższa średnia, tym dalej populacja jest od minimum (gorzej).
+    # spread: odchylenie standardowe - duże rozproszenie sugeruje brak konwergencji.
+    mean_perf = np.mean(F_norm, axis=0)
+    spread = np.std(F_norm, axis=0)
+
+    # Wskaźnik Robin Hooda
+    need = mean_perf + spread
+    need_weights = need / (np.sum(need) + 1e-9)
+
+    # --- ETAP 2: Obliczenie wpływu (korelacji) genów na kryteria ---
+    C = np.zeros((nobjs, nvars))
+    for i in range(nobjs):
+        for j in range(nvars):
+            std_x = np.std(front[:, j])
+            std_f = np.std(front_eval[:, i])
+
+            # Zabezpieczenie przed zerową wariancją (zmienna bezużyteczna w tym kroku)
+            if std_x > 1e-6 and std_f > 1e-6:
+                corr = np.abs(np.corrcoef(front[:, j], front_eval[:, i])[0, 1])
+            else:
+                corr = np.random.rand() * 0.01  # minimalny losowy szum
+            C[i, j] = corr
+
+    # --- ETAP 3: Przeciąganie liny (Ważenie Korelacji) ---
+    # Gracz w potrzebie sztucznie zwiększa atrakcyjność genów dla siebie
+    Weighted_C = C * need_weights[:, np.newaxis]
+
+    # Przydział każdego genu do gracza, który zgłosił na niego "największe zapotrzebowanie"
+    assignment = np.argmax(Weighted_C, axis=0)
+
+    patterns = np.zeros((nobjs, nvars), dtype=bool)
+    for j in range(nvars):
+        patterns[assignment[j], j] = True
+
+    # --- ETAP 4: Zabezpieczenie przed bezczynnością (Safeguard) ---
+    # Każdy Gracz musi dostać co najmniej 1 gen, w przeciwnym razie wystąpi Deadlock!
+    for i in range(nobjs):
+        if np.sum(patterns[i, :]) == 0:
+            # Znajdź najbogatszego Gracza (z największą liczbą przypisanych genów)
+            richest = np.argmax(np.sum(patterns, axis=1))
+            richest_genes = np.where(patterns[richest, :])[0]
+
+            # Odbierz najbogatszemu gen, który ma na jego kryterium NAJMNIEJSZY wpływ
+            if len(richest_genes) > 1:
+                least_important_gene = richest_genes[np.argmin(C[richest, richest_genes])]
+                patterns[richest, least_important_gene] = False
+                patterns[i, least_important_gene] = True
+
+    return patterns
+
+
 def adaptive_shap_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nvars: int, nobjs: int) -> np.ndarray:
     """
     Adaptive variable allocation mechanism driven by SHAP (Explainable AI).
