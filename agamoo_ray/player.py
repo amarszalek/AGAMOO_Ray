@@ -6,7 +6,7 @@ import logging
 import asyncio
 
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional, List
+from typing import Any, Tuple, Optional, List, Dict
 
 from agamoo_ray.repair import DefaultRepair
 from agamoo_ray.utils import front_suppression
@@ -149,9 +149,9 @@ class Player(ABC):
                         try:
                             # Execute optimization step only on assigned variables
                             if self.gens == 'all':
-                                pop, pop_eval, neval = self.step(pop, pop_eval, np.ones_like(pattern, dtype=bool))
+                                pop, pop_eval, neval = self.step(pop, pop_eval, np.ones_like(pattern, dtype=bool), global_state)
                             else:
-                                pop, pop_eval, neval = self.step(pop, pop_eval, pattern)
+                                pop, pop_eval, neval = self.step(pop, pop_eval, pattern, global_state)
                         except Exception as e:
                             logger.error(f"Player {self.num} error in step(): {e}", exc_info=True)
                             traceback.print_exc()
@@ -281,7 +281,7 @@ class Player(ABC):
                 logger.info(f"Player {self.num} successfully exited.")
 
     @abstractmethod
-    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
         Abstract method defining the core evolutionary step (e.g., Clonal Selection, Mutation).
         Must be implemented by subclasses.
@@ -290,6 +290,7 @@ class Player(ABC):
             pop (np.ndarray): Current population matrix.
             pop_eval (np.ndarray): Evaluated objective values for the population.
             pattern (np.ndarray): Boolean mask indicating which decision variables this player can modify.
+            global_state: new
 
         Returns:
             Tuple[np.ndarray, np.ndarray, int]: Updated population, updated evaluations, and number of evaluations performed.

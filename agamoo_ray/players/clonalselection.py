@@ -53,7 +53,7 @@ class ClonalSelection(Player):
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
 
-    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
         Executes a single evolutionary cycle of the Clonal Selection algorithm.
 
@@ -68,6 +68,7 @@ class ClonalSelection(Player):
             pop (np.ndarray): Current population (antibodies).
             pop_eval (np.ndarray): Evaluated objective values (affinity).
             pattern (np.ndarray): Boolean mask indicating modifiable decision variables.
+            global_state: new
 
         Returns:
             Tuple[np.ndarray, np.ndarray, int]: Updated population, updated evaluations, and number of evaluations.
@@ -75,8 +76,45 @@ class ClonalSelection(Player):
         temp_pop = deepcopy(pop)
         temp_pop_eval = deepcopy(pop_eval)
 
+        # --- DYNAMICZNA SKALARYZACJA (Surogatowa) ---
+        use_scalarization = False
+
+        # BEZPIECZNA ITERACJA: Pobieramy aktualną iterację z globalnego licznika dla tego gracza
+        current_iter = 0
+        if global_state is not None and 'iter_counters' in global_state:
+            # self.objective.obj to indeks przypisany do tego gracza (np. 0, 1, 2...)
+            current_iter = int(global_state['iter_counters'][self.objective.obj])
+
+        if global_state is not None and len(global_state.get('front', [])) > 5:
+            if current_iter > 0 and current_iter % 5 == 0:
+                use_scalarization = True
+                front = global_state['front']
+                front_eval = global_state['front_eval']
+
+                # Obliczenie punktu idealnego i nadiru z globalnego frontu
+                ideal = np.min(front_eval, axis=0)
+                nadir = np.max(front_eval, axis=0)
+                denom = nadir - ideal
+                denom[denom < 1e-9] = 1e-9
+                w = np.ones(front_eval.shape[1]) / front_eval.shape[1]
+
+                # Funkcja pomocnicza: Estymuje oceny na podstawie najbliższego sąsiada
+                def calc_tchebycheff(x_array, exact_evals):
+                    diff = x_array[:, np.newaxis, :] - front[np.newaxis, :, :]
+                    dist_sq = np.sum(diff ** 2, axis=2)
+                    nearest_idx = np.argmin(dist_sq, axis=1)
+
+                    est_evals = front_eval[nearest_idx].copy()
+                    est_evals[:, self.objective.obj] = exact_evals
+
+                    return np.max(w * np.abs(est_evals - ideal) / denom, axis=1)
+
+                parent_tch = calc_tchebycheff(temp_pop, temp_pop_eval)
+                arg_sort = parent_tch.argsort()
+
         # Sort population to determine affinity (lower evaluation = better rank)
-        arg_sort = temp_pop_eval.argsort()
+        if not use_scalarization:
+            arg_sort = temp_pop_eval.argsort()
 
         indices: List[int] = []
         better: List[np.ndarray] = []
@@ -114,9 +152,13 @@ class ClonalSelection(Player):
                 all_clones = np.vstack([all_clones, temp_pop])
                 all_clones_eval = np.append(all_clones_eval, temp_pop_eval)
                 # Select the absolute best individuals to form the new population
-                arg_sort = all_clones_eval.argsort()
-                temp_pop[:, :] = all_clones[arg_sort[:temp_pop.shape[0]], :]
-                temp_pop_eval[:] = all_clones_eval[arg_sort[:temp_pop_eval.shape[0]]]
+                if use_scalarization:
+                    all_tch = calc_tchebycheff(all_clones, all_clones_eval)
+                    final_sort = all_tch.argsort()
+                else:
+                    final_sort = all_clones_eval.argsort()
+                temp_pop[:, :] = all_clones[final_sort[:temp_pop.shape[0]], :]
+                temp_pop_eval[:] = all_clones_eval[final_sort[:temp_pop_eval.shape[0]]]
 
         else:
             # 'base' strategy: Tournament between a single parent and its own clones
@@ -132,12 +174,19 @@ class ClonalSelection(Player):
                     clones_eval = self.objective.evaluate(clones)
                     evaluation_counter += clones.shape[0]
                     # Find the best clone among the generated batch
-                    argmin = clones_eval.argmin()
-                    # Replace parent if the best clone has higher affinity
-                    if clones_eval[argmin] < temp_pop_eval[arg]:
-                        indices.append(arg)
-                        better.append(clones[argmin])
-                        better_eval.append(clones_eval[argmin])
+                    if use_scalarization:
+                        tch_c = calc_tchebycheff(clones, clones_eval)
+                        argmin = tch_c.argmin()
+                        if tch_c[argmin] < parent_tch[arg]:
+                            indices.append(arg)
+                            better.append(clones[argmin])
+                            better_eval.append(clones_eval[argmin])
+                    else:
+                        argmin = clones_eval.argmin()
+                        if clones_eval[argmin] < temp_pop_eval[arg]:
+                            indices.append(arg)
+                            better.append(clones[argmin])
+                            better_eval.append(clones_eval[argmin])
 
             if len(better) > 0:
                 temp_pop[indices] = np.stack(better)
@@ -146,15 +195,33 @@ class ClonalSelection(Player):
         # Receptor Editing (Suppression): Replace worst individuals with random new ones
         d = int(pop.shape[0] * self.sup)
         if d > 0:
-            # Get indices of the worst 'd' individuals
-            inds = temp_pop_eval.argsort()[-d:]
+            if use_scalarization:
+                inds = parent_tch.argsort()[-d:]  # Najgorsi trafiają do kasacji
+            else:
+                inds = temp_pop_eval.argsort()[-d:]
+
             pop_sup = np.zeros((inds.shape[0], self.objective.n_var))
             for i in range(inds.shape[0]):
-                # Only replace the genes governed by the current player's pattern
-                pop_sup[i] = np.where(pattern,
-                                      self._create_individual_uniform(self.objective.bounds),
-                                      temp_pop[inds[i]])
 
+                # Zamiast 'uniform_mutate', używamy inteligentnego krzyżowania osobników z Frontu
+                if global_state is not None and len(global_state.get('front', [])) >= 2:
+                    front_archive = global_state['front']
+
+                    # Losujemy 2 unikalnych rodziców z globalnego archiwum
+                    idx1, idx2 = np.random.choice(len(front_archive), 2, replace=False)
+                    p1, p2 = front_archive[idx1], front_archive[idx2]
+
+                    # Krzyżowanie arytmetyczne (współczynnik alpha losowy dla każdego genu)
+                    alpha = np.random.rand(self.objective.n_var)
+                    hybrid_genes = alpha * p1 + (1.0 - alpha) * p2
+                else:
+                    # Fallback awaryjny - jeśli front jest jeszcze za mały
+                    hybrid_genes = self._create_individual_uniform(self.objective.bounds)
+
+                # Aplikujemy hybrydowe geny TYLKO w dozwolonych miejsach (pattern)
+                pop_sup[i] = np.where(pattern, hybrid_genes, temp_pop[inds[i]])
+
+            # Naprawa ewentualnych wyjść poza dopuszczalne bounds (dzięki naprawie z Player)
             pop_sup = self.repair.do(pop_sup)
             pop_eval_sup = self.objective.evaluate(pop_sup)
             evaluation_counter += pop_sup.shape[0]

@@ -52,7 +52,7 @@ class PymooPlayer(Player):
         self.alg: Optional[Algorithm] = None
         self.sub_problem: Optional[Problem] = None
 
-    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int]:
+    def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         s = np.sum(pattern)
         if s == 0:
             return pop, pop_eval, 0
