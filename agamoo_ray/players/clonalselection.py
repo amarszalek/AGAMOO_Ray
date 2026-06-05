@@ -97,7 +97,9 @@ class ClonalSelection(Player):
                 nadir = np.max(front_eval, axis=0)
                 denom = nadir - ideal
                 denom[denom < 1e-9] = 1e-9
-                w = np.ones(front_eval.shape[1]) / front_eval.shape[1]
+                w = np.random.uniform(0.01, 1.0, front_eval.shape[1])
+                w[self.objective.obj] = np.max(w) + np.random.uniform(0.2, 0.5)
+                w = w / np.sum(w)
 
                 # Funkcja pomocnicza: Estymuje oceny na podstawie najbliższego sąsiada
                 def calc_tchebycheff(x_array, exact_evals):
