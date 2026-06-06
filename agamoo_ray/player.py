@@ -163,6 +163,11 @@ class Player(ABC):
                     # Integrating external knowledge into the local population's unassigned genes
                     front = global_state['front']
                     front_eval = global_state['front_eval']
+                    _, unique_indices = np.unique(front_eval, axis=0, return_index=True)
+                    front = front[unique_indices]
+                    front_eval = front_eval[unique_indices]
+
+
                     best = global_state['best']
 
                     if (self.exchange == 'front_random') and (len(front) > 0):
