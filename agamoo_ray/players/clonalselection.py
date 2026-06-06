@@ -101,13 +101,21 @@ class ClonalSelection(Player):
                 nadir = np.max(front_eval, axis=0)
                 denom = nadir - ideal
                 denom[denom < 1e-9] = 1e-9
-                w = np.random.uniform(0.01, 1.0, front_eval.shape[1])
-                #w = w / np.sum(w)
-                #w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
-                w = w / np.linalg.norm(w)
 
                 current_evals = global_state.get('evaluations', 0)
                 progress = min(current_evals / max(1, self.max_eval), 1.0)
+
+                w_focused = np.full(front_eval.shape[1], 0.01)
+                w_focused[self.objective.obj] = 1.0
+                w_random = np.random.uniform(0.01, 1.0, front_eval.shape[1])
+                w = (1.0 - progress) * w_focused + (progress * w_random)
+
+                #w = np.random.uniform(0.01, 1.0/front_eval.shape[1], front_eval.shape[1])
+                #w = w / np.sum(w)
+                #w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
+                #w[self.objective.obj] = (1.0/front_eval.shape[1]) * front_eval.shape[1]*(1.0-progress**2)
+                w = w / np.linalg.norm(w)
+
                 theta = 5.0 * (progress ** 2)
                 #theta = 5.0
 
