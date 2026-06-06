@@ -176,7 +176,6 @@ class Player(ABC):
                         for i in range(nn):
                             # Inject non-optimized genes from random Pareto front members
                             pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
-
                     elif ('front_sup' in self.exchange) and (len(front) > 0):
                         proc = 100
                         se = self.exchange.split('_')
@@ -238,10 +237,11 @@ class Player(ABC):
                                     inds[i], np.logical_not(pattern)]
 
                     # Final Repair & Evaluate post-exchange to guarantee valid solutions
-                    pop = self.repair.do(pop)
-                    pop_eval = self.objective.evaluate(pop)
+                    if self.exchange != 'none':
+                        pop = self.repair.do(pop)
+                        pop_eval = self.objective.evaluate(pop)
+                        self.evaluation_counter += pop.shape[0]
 
-                    self.evaluation_counter += pop.shape[0]
                     next_iter_counter += 1
 
                 # 2. Synchronization and Heartbeat Logic
