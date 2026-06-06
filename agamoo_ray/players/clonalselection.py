@@ -116,8 +116,8 @@ class ClonalSelection(Player):
                 #w[self.objective.obj] = (1.0/front_eval.shape[1]) * front_eval.shape[1]*(1.0-progress**2)
                 w = w / np.linalg.norm(w)
 
-                theta = 5.0 * (progress ** 2)
-                #theta = 5.0
+                #theta = 5.0 * (progress ** 2)
+                theta = 5.0
 
                 # Funkcja pomocnicza: Estymacja sąsiada + Obliczenie PBI
                 def calc_pbi(x_array, exact_evals):
