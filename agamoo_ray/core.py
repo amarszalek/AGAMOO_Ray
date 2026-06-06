@@ -542,6 +542,7 @@ class GlobalStorage:
             "wall_clock_time": elapsed_time,
             "nfe_array": self.evaluations_count.copy(),
             "nfe_total": np.sum(self.evaluations_count),
+            "front": self.front.copy() if self.front is not None else np.array([]),
             "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([]),
             "patterns": deepcopy(self.lpatterns),
             "env_version": self.current_env_version,
