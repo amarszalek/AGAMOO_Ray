@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple, Optional, List, Dict
 
 from agamoo_ray.repair import DefaultRepair
-from agamoo_ray.utils import front_suppression
+#from agamoo_ray.utils import front_suppression
 from agamoo_ray.objective import Objective
 
 logger = logging.getLogger(__name__)
@@ -186,7 +186,8 @@ class Player(ABC):
                         # Apply distance suppression to maintain diversity during exchange
                         target_size = int(pop.shape[0] * (proc / 100))
                         if target_size < local_front.shape[0]:
-                            mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
+                            #mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
+                            mask = self._front_suppression_cd(local_front_eval, target_size)
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
@@ -220,7 +221,8 @@ class Player(ABC):
 
                         nn = (pop.shape[0] - limit_idx)
                         if nn < local_front.shape[0]:
-                            mask = front_suppression(local_front, local_front_eval, nn, mode='objectives')
+                            #mask = front_suppression(local_front, local_front_eval, nn, mode='objectives')
+                            mask = self._front_suppression_cd(local_front_eval, nn)
                             local_front = local_front[mask]
 
                         if len(local_front) > 0:
@@ -326,6 +328,40 @@ class Player(ABC):
         a = np.array([bounds[k][0] for k in range(len(bounds))])
         b = np.array([bounds[k][1] for k in range(len(bounds))])
         return np.random.uniform(a, b)
+    @staticmethod
+    def _front_suppression_cd(front_eval, max_front):
+        n_points, n_objs = front_eval.shape
+
+        # Inicjalizacja tablicy dystansów zerami
+        distances = np.zeros(n_points)
+
+        # Iterujemy po każdym kryterium niezależnie
+        for m in range(n_objs):
+            # 1. Sortowanie indeksów po m-tym kryterium
+            sorted_indices = np.argsort(front_eval[:, m])
+
+            # 2. Pobranie wartości minimalnej i maksymalnej dla danego kryterium
+            f_min = front_eval[sorted_indices[0], m]
+            f_max = front_eval[sorted_indices[-1], m]
+
+            # 3. Przypisanie nieskończoności punktom brzegowym (ekstremom), aby ich nigdy nie usunąć
+            distances[sorted_indices[0]] = np.inf
+            distances[sorted_indices[-1]] = np.inf
+
+            # Zabezpieczenie przed dzieleniem przez zero (jeśli cały front zapadł się w jeden punkt na tym kryterium)
+            if f_max - f_min < 1e-9:
+                continue
+
+            # 4. Szybkie wektorowe obliczenie dystansu dla punktów wewnętrznych
+            # Odległość = (wartość sąsiada z prawej - wartość sąsiada z lewej) / (max - min)
+            prev_vals = front_eval[sorted_indices[:-2], m]  # Sąsiedzi z lewej strony
+            next_vals = front_eval[sorted_indices[2:], m]  # Sąsiedzi z prawej strony
+
+            # Zwiększamy dystans danego osobnika
+            distances[sorted_indices[1:-1]] += (next_vals - prev_vals) / (f_max - f_min)
+        best_indices = np.argsort(distances)[::-1]
+        return best_indices[:max_front]
+
 
 
 @ray.remote
