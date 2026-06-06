@@ -92,9 +92,9 @@ class ClonalSelection(Player):
                 use_scalarization = True
                 front = global_state['front']
                 front_eval = global_state['front_eval']
-                _, unique_indices = np.unique(front_eval, axis=0, return_index=True)
-                front = front[unique_indices]
-                front_eval = front_eval[unique_indices]
+                #_, unique_indices = np.unique(front_eval, axis=0, return_index=True)
+                #front = front[unique_indices]
+                #front_eval = front_eval[unique_indices]
 
                 # Obliczenie punktu idealnego i nadiru z globalnego frontu
                 ideal = np.min(front_eval, axis=0)
