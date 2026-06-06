@@ -51,7 +51,7 @@ class ClonalSelection(Player):
         self.strategy: str = player_param.get('strategy', 'base')
         self.scalar_freq: int = player_param.get('scalar_freq', 0)
         self.max_eval: int = player_param.get('max_eval', 10000)
-
+        self.theta: int = player_param.get('theta', 5.0)
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
 
@@ -117,7 +117,7 @@ class ClonalSelection(Player):
                 w = w / np.linalg.norm(w)
 
                 #theta = 5.0 * (progress ** 2)
-                theta = 5.0
+                theta = self.theta
 
                 # Funkcja pomocnicza: Estymacja sąsiada + Obliczenie PBI
                 def calc_pbi(x_array, exact_evals):
