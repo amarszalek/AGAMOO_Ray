@@ -55,7 +55,7 @@ class ClonalSelection(Player):
         self.persistent_w = None
         self.seed  = player_param.get('seed', None)
         if self.seed is not None:
-            np.random.seed(self.seed)
+            np.random.seed(self.seed+num)
 
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
