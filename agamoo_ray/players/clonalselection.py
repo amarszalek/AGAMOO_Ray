@@ -94,10 +94,10 @@ class ClonalSelection(Player):
 
         if global_state is not None and len(global_state.get('front', [])) > 5 and self.scalar_freq > 0 :
             # Wprowadzamy cykle: np. 5 iteracji specjalizacji + 5 iteracji kompromisu
-            cycle_length = self.scalar_freq * 2
+            cycle_length = self.scalar_freq
             phase_step = current_iter % cycle_length
 
-            if phase_step >= self.scalar_freq:
+            if phase_step >= 0:#self.scalar_freq:
                 use_scalarization = True
                 front = global_state['front']
                 front_eval = global_state['front_eval']
@@ -109,7 +109,7 @@ class ClonalSelection(Player):
                 progress = min(current_evals / max(1, self.max_eval), 1.0)
 
                 # GENEROWANIE WEKTORA TYLKO NA POCZĄTKU FAZY (lub gdy go brak)
-                if phase_step == self.scalar_freq or self.persistent_w is None:
+                if phase_step == 0 or self.persistent_w is None:
                     w_focused = np.full(front_eval.shape[1], 0.01)
                     w_focused[self.objective.obj] = 1.0
                     w_random = np.random.uniform(0.01, 1.0, front_eval.shape[1])
