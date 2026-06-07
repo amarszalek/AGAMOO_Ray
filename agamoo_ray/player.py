@@ -215,8 +215,8 @@ class Player(ABC):
 
                         # --- Prawdopodobieństwo ---
                         do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
-                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.5 #var_prob
-                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var
+                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
+                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
 
                         # --- Matematyka SBX ---
                         u = np.random.rand(n_pop, n_vars)
