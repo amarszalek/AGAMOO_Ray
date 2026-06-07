@@ -205,6 +205,45 @@ class Player(ABC):
                             if (i != obj_idx) and (best[i] is not None):
                                 pop[:, patterns[i]] = best[i][patterns[i]]
 
+                    elif (self.exchange == 'cross_sbx') and (len(front) > 0):
+                        eta = 15.0
+                        n_pop, n_vars = pop.shape
+
+                        p1 = pop
+                        front_idx = np.random.choice(len(front), n_pop, replace=True)
+                        p2 = front[front_idx]
+
+                        # --- Prawdopodobieństwo ---
+                        do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
+                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.5 #var_prob
+                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var
+
+                        # --- Matematyka SBX ---
+                        u = np.random.rand(n_pop, n_vars)
+                        beta = np.zeros_like(u)
+
+                        mask_leq_05 = u <= 0.5
+                        mask_gt_05 = ~mask_leq_05
+
+                        beta[mask_leq_05] = (2.0 * u[mask_leq_05]) ** (1.0 / (eta + 1.0))
+                        beta[mask_gt_05] = (1.0 / (2.0 * (1.0 - u[mask_gt_05]))) ** (1.0 / (eta + 1.0))
+
+                        c1 = 0.5 * ((1 + beta) * p1 + (1 - beta) * p2)
+                        c2 = 0.5 * ((1 - beta) * p1 + (1 + beta) * p2)
+
+                        take_c1 = np.random.rand(n_pop, n_vars) <= 0.5
+                        # take_c1 = np.random.rand(n_pop, 1) <= 0.5
+                        selected_children = np.where(take_c1, c1, c2)
+
+                        pop = np.where(do_crossover, selected_children, p1)
+
+                        if self.objective.bounds is not None:
+                            bounds_arr = np.array(self.objective.bounds)
+                            lower_bounds = bounds_arr[:, 0]
+                            upper_bounds = bounds_arr[:, 1]
+
+                            pop = np.clip(pop, lower_bounds, upper_bounds)
+
                     elif ('mix' in self.exchange) and (best is not None) and (len(front) > 0):
                         proc = 50
                         se = self.exchange.split('_')

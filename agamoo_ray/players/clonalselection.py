@@ -298,8 +298,11 @@ class ClonalSelection(Player):
         if s == 0:
             return ind
 
-        r = np.random.random(pattern.shape) < (1.0 / s)
-        mutate_mask = np.logical_and(pattern, r)
+        r = np.random.random(s) < (1.0 / s)
+        mutate_mask = np.zeros_like(pattern, dtype=bool)
+        mutate_mask[pattern] = r
+        # r = np.random.random(pattern.shape) < (1.0 / s)
+        # mutate_mask = np.logical_and(pattern, r)
 
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
@@ -312,6 +315,8 @@ class ClonalSelection(Player):
         ind[mutate_mask] = np.random.uniform(a, b)
         return ind
 
+
+
     @staticmethod
     def _bound_mutate(individual: np.ndarray, pattern: np.ndarray, bounds: List[Tuple[float, float]]) -> np.ndarray:
         """Highly optimized, vectorized boundary mutation."""
@@ -320,8 +325,12 @@ class ClonalSelection(Player):
         if s == 0:
             return ind
 
-        r = np.random.random(pattern.shape) < (1.0 / s)
-        mutate_mask = np.logical_and(pattern, r)
+        r = np.random.random(s) < (1.0 / s)
+        mutate_mask = np.zeros_like(pattern, dtype=bool)
+        mutate_mask[pattern] = r
+
+        # r = np.random.random(pattern.shape) < (1.0 / s)
+        # mutate_mask = np.logical_and(pattern, r)
 
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
@@ -351,8 +360,12 @@ class ClonalSelection(Player):
         if s == 0:
             return ind
 
-        r = np.random.random(pattern.shape) < (1.0 / s)
-        mutate_mask = np.logical_and(pattern, r)
+        r = np.random.random(s) < (1.0 / s)
+        mutate_mask = np.zeros_like(pattern, dtype=bool)
+        mutate_mask[pattern] = r
+
+        # r = np.random.random(pattern.shape) < (1.0 / s)
+        # mutate_mask = np.logical_and(pattern, r)
 
         if not np.any(mutate_mask):
             indx = np.where(pattern)[0]
