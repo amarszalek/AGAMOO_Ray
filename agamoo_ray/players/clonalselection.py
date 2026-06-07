@@ -51,8 +51,12 @@ class ClonalSelection(Player):
         self.strategy: str = player_param.get('strategy', 'base')
         self.scalar_freq: int = player_param.get('scalar_freq', 0)
         self.max_eval: int = player_param.get('max_eval', 10000)
-        self.theta: int = player_param.get('theta', 5.0)
+        self.theta: float = player_param.get('theta', 5.0)
         self.persistent_w = None
+        self.seed  = player_param.get('seed', None)
+        if self.seed is not None:
+            np.random.seed(self.seed)
+
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
 
