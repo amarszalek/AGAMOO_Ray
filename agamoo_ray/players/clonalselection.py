@@ -52,6 +52,7 @@ class ClonalSelection(Player):
         self.scalar_freq: int = player_param.get('scalar_freq', 0)
         self.max_eval: int = player_param.get('max_eval', 10000)
         self.theta: int = player_param.get('theta', 5.0)
+        self.persistent_w = None
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
 
@@ -88,7 +89,11 @@ class ClonalSelection(Player):
             current_iter = int(global_state['iter_counters'][self.objective.obj])
 
         if global_state is not None and len(global_state.get('front', [])) > 5 and self.scalar_freq > 0 :
-            if current_iter > 0 and current_iter % 5 == 0:
+            # Wprowadzamy cykle: np. 5 iteracji specjalizacji + 5 iteracji kompromisu
+            cycle_length = self.scalar_freq * 2
+            phase_step = current_iter % cycle_length
+
+            if phase_step >= self.scalar_freq:
                 use_scalarization = True
                 front = global_state['front']
                 front_eval = global_state['front_eval']
@@ -96,28 +101,30 @@ class ClonalSelection(Player):
                 #front = front[unique_indices]
                 #front_eval = front_eval[unique_indices]
 
+                current_evals = global_state.get('evaluations', 0)
+                progress = min(current_evals / max(1, self.max_eval), 1.0)
+
+                # GENEROWANIE WEKTORA TYLKO NA POCZĄTKU FAZY (lub gdy go brak)
+                if phase_step == self.scalar_freq or self.persistent_w is None:
+                    w_focused = np.full(front_eval.shape[1], 0.01)
+                    w_focused[self.objective.obj] = 1.0
+                    w_random = np.random.uniform(0.01, 1.0, front_eval.shape[1])
+
+                    w_raw = (1.0 - progress) * w_focused + (progress * w_random)
+                    self.persistent_w = w_raw / np.linalg.norm(w_raw)
+
+                # Algorytm przez całą fazę (np. przez 5 iteracji) używa zapamiętanego wektora!
+                w = self.persistent_w
+
                 # Obliczenie punktu idealnego i nadiru z globalnego frontu
                 ideal = np.min(front_eval, axis=0)
                 nadir = np.max(front_eval, axis=0)
                 denom = nadir - ideal
                 denom[denom < 1e-9] = 1e-9
 
-                current_evals = global_state.get('evaluations', 0)
-                progress = min(current_evals / max(1, self.max_eval), 1.0)
 
-                w_focused = np.full(front_eval.shape[1], 0.01)
-                w_focused[self.objective.obj] = 1.0
-                w_random = np.random.uniform(0.01, 1.0, front_eval.shape[1])
-                w = (1.0 - progress) * w_focused + (progress * w_random)
-
-                #w = np.random.uniform(0.01, 1.0/front_eval.shape[1], front_eval.shape[1])
-                #w = w / np.sum(w)
-                #w[self.objective.obj] = np.max(w) + np.random.uniform(0.01, 0.1)
-                #w[self.objective.obj] = (1.0/front_eval.shape[1]) * front_eval.shape[1]*(1.0-progress**2)
-                w = w / np.linalg.norm(w)
-
-                #theta = 5.0 * (progress ** 2)
-                theta = self.theta
+                theta = self.theta * (progress ** 2)
+                #theta = self.theta
 
                 # Funkcja pomocnicza: Estymacja sąsiada + Obliczenie PBI
                 def calc_pbi(x_array, exact_evals):
