@@ -92,6 +92,12 @@ class Player(ABC):
         next_iter_counter = 0
         iters_pop: Optional[np.ndarray] = None
 
+        lower_bounds, upper_bounds = None, None
+        if self.objective.bounds is not None:
+            bounds_arr = np.array(self.objective.bounds)
+            lower_bounds = bounds_arr[:, 0]
+            upper_bounds = bounds_arr[:, 1]
+
         # Local population initialization
         if self.init_pop is not None:
             pop = self.init_pop.copy()
@@ -237,11 +243,32 @@ class Player(ABC):
 
                         pop = np.where(do_crossover, selected_children, p1)
 
-                        if self.objective.bounds is not None:
-                            bounds_arr = np.array(self.objective.bounds)
-                            lower_bounds = bounds_arr[:, 0]
-                            upper_bounds = bounds_arr[:, 1]
+                        if lower_bounds is not None:
+                            pop = np.clip(pop, lower_bounds, upper_bounds)
 
+                    elif (self.exchange == 'cross') and (len(front) > 0):
+                        n_pop, n_vars = pop.shape
+
+                        p1 = pop
+                        front_idx = np.random.choice(len(front), n_pop, replace=True)
+                        p2 = front[front_idx]
+
+                        # --- Prawdopodobieństwo ---
+                        do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
+                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
+                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
+
+                        # 3. Matematyka Krzyżowania Arytmetycznego
+                        # Losujemy wagę alfa [0, 1] dla każdego krzyżowanego genu niezależnie
+                        alpha = np.random.rand(n_pop, n_vars)
+
+                        # Wyliczamy punkt dokładnie pomiędzy Rodzicem 1 a Rodzicem 2
+                        child = alpha * p1 + (1.0 - alpha) * p2
+
+                        # 4. Podmiana genów
+                        pop = np.where(do_crossover, child, p1)
+
+                        if lower_bounds is not None:
                             pop = np.clip(pop, lower_bounds, upper_bounds)
 
                     elif ('mix' in self.exchange) and (best is not None) and (len(front) > 0):
