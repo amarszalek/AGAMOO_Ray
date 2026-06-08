@@ -165,6 +165,43 @@ class Player(ABC):
                     self.iteration += 1
                     self.evaluation_counter += neval
 
+                    # 2. Synchronization and Heartbeat Logic
+                    iters = global_state['iter_counters'].copy()
+                    iters[obj_idx] = self.iteration
+
+                    iters_mask = np.zeros(len(iters), dtype=bool)
+                    for i in range(len(iters)):
+                        if iters_pop is None or iters_pop[i] < iters[i]:
+                            iters_mask[i] = True
+
+                    # 3. Global Storage Update Dispatch
+                    # Transmit full payload if other players have progressed, else send a lightweight heartbeat
+                    if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
+                        ray.get(self.storage.update.remote({
+                            'nobj': obj_idx,
+                            'population': pop.copy(),
+                            'population_eval': pop_eval.copy(),
+                            'evaluation_counter': self.evaluation_counter,
+                            'iteration': self.iteration,
+                            'iter_flag': False
+                        }, env_version=self.env_version))
+                        if self.verbose:
+                            logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
+
+                        next_iter_counter = 0
+                        iters_pop = iters.copy()
+                    else:
+                        # Heartbeat update (only iteration info)
+                        self.storage.update.remote({
+                            'nobj': obj_idx,
+                            'iter_flag': True,
+                            'iteration': self.iteration,
+                            'evaluation_counter': self.evaluation_counter
+                        }, env_version=self.env_version)
+                        # Yield execution briefly to avoid hammering the object store
+                        time.sleep(0.001)
+
+
                     # --- Cooperative Coevolution Exchange Logic ---
                     # Integrating external knowledge into the local population's unassigned genes
                     front = global_state['front']
@@ -312,40 +349,7 @@ class Player(ABC):
 
                     next_iter_counter += 1
 
-                # 2. Synchronization and Heartbeat Logic
-                iters = global_state['iter_counters'].copy()
-                iters[obj_idx] = self.iteration
 
-                iters_mask = np.zeros(len(iters), dtype=bool)
-                for i in range(len(iters)):
-                    if iters_pop is None or iters_pop[i] < iters[i]:
-                        iters_mask[i] = True
-
-                # 3. Global Storage Update Dispatch
-                # Transmit full payload if other players have progressed, else send a lightweight heartbeat
-                if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
-                    ray.get(self.storage.update.remote({
-                        'nobj': obj_idx,
-                        'population': pop.copy(),
-                        'population_eval': pop_eval.copy(),
-                        'evaluation_counter': self.evaluation_counter,  # diff since last update
-                        'iteration': self.iteration,
-                        'iter_flag': False
-                    }, env_version=self.env_version))
-                    if self.verbose:
-                        logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
-
-                    next_iter_counter = 0
-                    iters_pop = iters.copy()
-                else:
-                    # Heartbeat update (only iteration info)
-                    self.storage.update.remote({
-                        'nobj': obj_idx,
-                        'iter_flag': True,
-                        'iteration': self.iteration
-                    }, env_version=self.env_version)
-                    # Yield execution briefly to avoid hammering the object store
-                    time.sleep(0.001)
 
 
         except Exception as e:
