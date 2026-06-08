@@ -215,9 +215,21 @@ class Player(ABC):
                     exchange_iter = global_state['exchange_iter']
 
                     if self.iteration % exchange_iter == 0:
-                        if (self.exchange == 'front_random') and (len(front) > 0):
-                            nn = pop.shape[0]
-                            inds = np.random.choice(front.shape[0], nn, replace=True)
+                        if ('front_random' in self.exchange) and (len(front) > 0):
+                            proc = 100
+                            se = self.exchange.split('_')
+                            if (len(se) == 3) and (0 < int(se[2]) < 100):
+                                proc = int(se[2])
+
+                            target_size = int(pop.shape[0] * (proc / 100))
+                            nn = min(target_size, front.shape[0])
+                            # nn = pop.shape[0]
+                            if nn > front.shape[0]:
+                                inds = np.random.choice(front.shape[0], nn, replace=True)
+                            else:
+                                inds = np.random.choice(front.shape[0], nn, replace=False)
+
+                            #inds = np.random.choice(front.shape[0], nn, replace=True)
                             for i in range(nn):
                                 # Inject non-optimized genes from random Pareto front members
                                 #pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
@@ -242,7 +254,10 @@ class Player(ABC):
 
                             if len(local_front) > 0:
                                 nn = min(target_size, local_front.shape[0])
-                                inds = np.random.choice(local_front.shape[0], nn, replace=True)
+                                if nn > local_front.shape[0]:
+                                    inds = np.random.choice(local_front.shape[0], nn, replace=True)
+                                else:
+                                    inds = np.random.choice(local_front.shape[0], nn, replace=False)
                                 for i in range(nn):
                                     # pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
                                     pop[i, :] = local_front[inds[i], :]
