@@ -23,6 +23,7 @@ class AGAMOO:
     def __init__(self,
                  max_eval: int,
                  change_iter: int,
+                 exchange_iter: int,
                  next_iter: int,
                  max_front: int,
                  max_front_tol: float = 0.0,
@@ -51,6 +52,7 @@ class AGAMOO:
 
         self.max_eval = max_eval
         self.change_iter = change_iter
+        self.exchange_iter = exchange_iter
         self.next_iter = next_iter
         self.max_front = max_front
         self.max_front_tol = max_front_tol
@@ -115,7 +117,7 @@ class AGAMOO:
         self.ref_holder = RefHolder.remote()
 
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
-            nvars, nobjs, self.max_eval, self.change_iter, self.next_iter,
+            nvars, nobjs, self.max_eval, self.change_iter, self.exchange_iter, self.next_iter,
             self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
             ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq,
         )
@@ -276,6 +278,7 @@ class GlobalStorage:
                  nobjs: int,
                  max_eval: int,
                  change_iter: int,
+                 exchange_iter: int,
                  next_iter: int,
                  max_front: int,
                  assign_gens: str = 'random',
@@ -290,6 +293,7 @@ class GlobalStorage:
         self.nobjs = nobjs
         self.max_eval = max_eval
         self.change_iter = change_iter
+        self.exchange_iter = exchange_iter
         self.next_iter = next_iter
         self.max_front = max_front
         self.max_front_tol = max_front_tol
@@ -338,7 +342,7 @@ class GlobalStorage:
             'iter_counters': self.iter_counters,
             'patterns': self.patterns,
             'next_iter': self.next_iter,
-            'change_iter': self.change_iter,
+            'exchange_iter': self.exchange_iter,
             'stop_flag': self.stop_flag,
             'evaluations': self.total_evaluations,
             'env_version': self.current_env_version,

@@ -175,9 +175,9 @@ class Player(ABC):
 
 
                     best = global_state['best']
-                    change_iter = global_state['change_iter']
+                    exchange_iter = global_state['exchange_iter']
 
-                    if self.iteration % change_iter == 0:
+                    if self.iteration % exchange_iter == 0:
                         if (self.exchange == 'front_random') and (len(front) > 0):
                             nn = pop.shape[0]
                             inds = np.random.choice(front.shape[0], nn, replace=True)
