@@ -206,9 +206,9 @@ class Player(ABC):
                     # Integrating external knowledge into the local population's unassigned genes
                     front = global_state['front']
                     front_eval = global_state['front_eval']
-                    _, unique_indices = np.unique(front_eval, axis=0, return_index=True)
-                    front = front[unique_indices]
-                    front_eval = front_eval[unique_indices]
+                    #_, unique_indices = np.unique(front_eval, axis=0, return_index=True)
+                   # front = front[unique_indices]
+                   # front_eval = front_eval[unique_indices]
 
 
                     best = global_state['best']
@@ -220,7 +220,8 @@ class Player(ABC):
                             inds = np.random.choice(front.shape[0], nn, replace=True)
                             for i in range(nn):
                                 # Inject non-optimized genes from random Pareto front members
-                                pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
+                                #pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
+                                pop[i, :] = front[inds[i], :]
                         elif ('front_sup' in self.exchange) and (len(front) > 0):
                             proc = 100
                             se = self.exchange.split('_')
@@ -262,7 +263,7 @@ class Player(ABC):
                             # --- Prawdopodobieństwo ---
                             do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
                             do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
-                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
+                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var #& ~pattern
 
                             # --- Matematyka SBX ---
                             u = np.random.rand(n_pop, n_vars)
@@ -296,7 +297,7 @@ class Player(ABC):
                             # --- Prawdopodobieństwo ---
                             do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
                             do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
-                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
+                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var #& ~pattern
 
                             # 3. Matematyka Krzyżowania Arytmetycznego
                             # Losujemy wagę alfa [0, 1] dla każdego krzyżowanego genu niezależnie
