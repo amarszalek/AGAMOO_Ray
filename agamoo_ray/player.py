@@ -175,138 +175,140 @@ class Player(ABC):
 
 
                     best = global_state['best']
+                    change_iter = global_state['change_iter']
 
-                    if (self.exchange == 'front_random') and (len(front) > 0):
-                        nn = pop.shape[0]
-                        inds = np.random.choice(front.shape[0], nn, replace=True)
-                        for i in range(nn):
-                            # Inject non-optimized genes from random Pareto front members
-                            pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
-                    elif ('front_sup' in self.exchange) and (len(front) > 0):
-                        proc = 100
-                        se = self.exchange.split('_')
-                        if (len(se) == 3) and (0 < int(se[2]) < 100):
-                            proc = int(se[2])
-
-                        arr = np.arange(front.shape[0])
-                        np.random.shuffle(arr)
-                        local_front = front[arr]
-                        local_front_eval = front_eval[arr]
-
-                        # Apply distance suppression to maintain diversity during exchange
-                        target_size = int(pop.shape[0] * (proc / 100))
-                        if target_size < local_front.shape[0]:
-                            #mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
-                            mask = self._front_suppression_cd(local_front_eval, target_size)
-                            local_front = local_front[mask]
-
-                        if len(local_front) > 0:
-                            nn = min(target_size, local_front.shape[0])
-                            inds = np.random.choice(local_front.shape[0], nn, replace=True)
+                    if self.iteration % change_iter == 0:
+                        if (self.exchange == 'front_random') and (len(front) > 0):
+                            nn = pop.shape[0]
+                            inds = np.random.choice(front.shape[0], nn, replace=True)
                             for i in range(nn):
-                                pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
+                                # Inject non-optimized genes from random Pareto front members
+                                pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
+                        elif ('front_sup' in self.exchange) and (len(front) > 0):
+                            proc = 100
+                            se = self.exchange.split('_')
+                            if (len(se) == 3) and (0 < int(se[2]) < 100):
+                                proc = int(se[2])
 
-                    elif (self.exchange == 'original') and (best is not None):
-                        for i in range(len(best)):
-                            if (i != obj_idx) and (best[i] is not None):
-                                pop[:, patterns[i]] = best[i][patterns[i]]
+                            arr = np.arange(front.shape[0])
+                            np.random.shuffle(arr)
+                            local_front = front[arr]
+                            local_front_eval = front_eval[arr]
 
-                    elif (self.exchange == 'cross_sbx') and (len(front) > 0):
-                        eta = 15.0
-                        n_pop, n_vars = pop.shape
+                            # Apply distance suppression to maintain diversity during exchange
+                            target_size = int(pop.shape[0] * (proc / 100))
+                            if target_size < local_front.shape[0]:
+                                #mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
+                                mask = self._front_suppression_cd(local_front_eval, target_size)
+                                local_front = local_front[mask]
 
-                        p1 = pop
-                        front_idx = np.random.choice(len(front), n_pop, replace=True)
-                        p2 = front[front_idx]
+                            if len(local_front) > 0:
+                                nn = min(target_size, local_front.shape[0])
+                                inds = np.random.choice(local_front.shape[0], nn, replace=True)
+                                for i in range(nn):
+                                    pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
 
-                        # --- Prawdopodobieństwo ---
-                        do_cross_ind = np.random.rand(n_pop) <= 0.5 #cross_prob
-                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
-                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
+                        elif (self.exchange == 'original') and (best is not None):
+                            for i in range(len(best)):
+                                if (i != obj_idx) and (best[i] is not None):
+                                    pop[:, patterns[i]] = best[i][patterns[i]]
 
-                        # --- Matematyka SBX ---
-                        u = np.random.rand(n_pop, n_vars)
-                        beta = np.zeros_like(u)
+                        elif (self.exchange == 'cross_sbx') and (len(front) > 0):
+                            eta = 15.0
+                            n_pop, n_vars = pop.shape
 
-                        mask_leq_05 = u <= 0.5
-                        mask_gt_05 = ~mask_leq_05
+                            p1 = pop
+                            front_idx = np.random.choice(len(front), n_pop, replace=True)
+                            p2 = front[front_idx]
 
-                        beta[mask_leq_05] = (2.0 * u[mask_leq_05]) ** (1.0 / (eta + 1.0))
-                        beta[mask_gt_05] = (1.0 / (2.0 * (1.0 - u[mask_gt_05]))) ** (1.0 / (eta + 1.0))
+                            # --- Prawdopodobieństwo ---
+                            do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
+                            do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
+                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
 
-                        c1 = 0.5 * ((1 + beta) * p1 + (1 - beta) * p2)
-                        c2 = 0.5 * ((1 - beta) * p1 + (1 + beta) * p2)
+                            # --- Matematyka SBX ---
+                            u = np.random.rand(n_pop, n_vars)
+                            beta = np.zeros_like(u)
 
-                        take_c1 = np.random.rand(n_pop, n_vars) <= 0.5
-                        # take_c1 = np.random.rand(n_pop, 1) <= 0.5
-                        selected_children = np.where(take_c1, c1, c2)
+                            mask_leq_05 = u <= 0.5
+                            mask_gt_05 = ~mask_leq_05
 
-                        pop = np.where(do_crossover, selected_children, p1)
+                            beta[mask_leq_05] = (2.0 * u[mask_leq_05]) ** (1.0 / (eta + 1.0))
+                            beta[mask_gt_05] = (1.0 / (2.0 * (1.0 - u[mask_gt_05]))) ** (1.0 / (eta + 1.0))
 
-                        if lower_bounds is not None:
-                            pop = np.clip(pop, lower_bounds, upper_bounds)
+                            c1 = 0.5 * ((1 + beta) * p1 + (1 - beta) * p2)
+                            c2 = 0.5 * ((1 - beta) * p1 + (1 + beta) * p2)
 
-                    elif (self.exchange == 'cross') and (len(front) > 0):
-                        n_pop, n_vars = pop.shape
+                            take_c1 = np.random.rand(n_pop, n_vars) <= 0.5
+                            # take_c1 = np.random.rand(n_pop, 1) <= 0.5
+                            selected_children = np.where(take_c1, c1, c2)
 
-                        p1 = pop
-                        front_idx = np.random.choice(len(front), n_pop, replace=True)
-                        p2 = front[front_idx]
+                            pop = np.where(do_crossover, selected_children, p1)
 
-                        # --- Prawdopodobieństwo ---
-                        do_cross_ind = np.random.rand(n_pop) <= 0.5 #cross_prob
-                        do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
-                        do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
+                            if lower_bounds is not None:
+                                pop = np.clip(pop, lower_bounds, upper_bounds)
 
-                        # 3. Matematyka Krzyżowania Arytmetycznego
-                        # Losujemy wagę alfa [0, 1] dla każdego krzyżowanego genu niezależnie
-                        alpha = np.random.rand(n_pop, n_vars)
+                        elif (self.exchange == 'cross') and (len(front) > 0):
+                            n_pop, n_vars = pop.shape
 
-                        # Wyliczamy punkt dokładnie pomiędzy Rodzicem 1 a Rodzicem 2
-                        child = alpha * p1 + (1.0 - alpha) * p2
+                            p1 = pop
+                            front_idx = np.random.choice(len(front), n_pop, replace=True)
+                            p2 = front[front_idx]
 
-                        # 4. Podmiana genów
-                        pop = np.where(do_crossover, child, p1)
+                            # --- Prawdopodobieństwo ---
+                            do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
+                            do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
+                            do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var & ~pattern
 
-                        if lower_bounds is not None:
-                            pop = np.clip(pop, lower_bounds, upper_bounds)
+                            # 3. Matematyka Krzyżowania Arytmetycznego
+                            # Losujemy wagę alfa [0, 1] dla każdego krzyżowanego genu niezależnie
+                            alpha = np.random.rand(n_pop, n_vars)
 
-                    elif ('mix' in self.exchange) and (best is not None) and (len(front) > 0):
-                        proc = 50
-                        se = self.exchange.split('_')
-                        if (len(se) == 2) and (0 < int(se[1]) < 100):
-                            proc = int(se[1])
+                            # Wyliczamy punkt dokładnie pomiędzy Rodzicem 1 a Rodzicem 2
+                            child = alpha * p1 + (1.0 - alpha) * p2
 
-                        # Phase 1: Integrate genes from the specific best solutions
-                        limit_idx = int(pop.shape[0] * (proc / 100))
-                        for i in range(len(best)):
-                            if (i != obj_idx) and (best[i] is not None):
-                                pop[:limit_idx, patterns[i]] = best[i][patterns[i]]
+                            # 4. Podmiana genów
+                            pop = np.where(do_crossover, child, p1)
 
-                        # Phase 2: Integrate genes from the diverse Pareto front
-                        arr = np.arange(front.shape[0])
-                        np.random.shuffle(arr)
-                        local_front = front[arr]
-                        local_front_eval = front_eval[arr]
+                            if lower_bounds is not None:
+                                pop = np.clip(pop, lower_bounds, upper_bounds)
 
-                        nn = (pop.shape[0] - limit_idx)
-                        if nn < local_front.shape[0]:
-                            #mask = front_suppression(local_front, local_front_eval, nn, mode='objectives')
-                            mask = self._front_suppression_cd(local_front_eval, nn)
-                            local_front = local_front[mask]
+                        elif ('mix' in self.exchange) and (best is not None) and (len(front) > 0):
+                            proc = 50
+                            se = self.exchange.split('_')
+                            if (len(se) == 2) and (0 < int(se[1]) < 100):
+                                proc = int(se[1])
 
-                        if len(local_front) > 0:
-                            actual_nn = min(nn, local_front.shape[0])
-                            inds = np.random.choice(local_front.shape[0], actual_nn, replace=True)
-                            for i in range(actual_nn):
-                                pop[limit_idx + i, np.logical_not(pattern)] = local_front[
-                                    inds[i], np.logical_not(pattern)]
+                            # Phase 1: Integrate genes from the specific best solutions
+                            limit_idx = int(pop.shape[0] * (proc / 100))
+                            for i in range(len(best)):
+                                if (i != obj_idx) and (best[i] is not None):
+                                    pop[:limit_idx, patterns[i]] = best[i][patterns[i]]
 
-                    # Final Repair & Evaluate post-exchange to guarantee valid solutions
-                    if self.exchange != 'none':
-                        pop = self.repair.do(pop)
-                        pop_eval = self.objective.evaluate(pop)
-                        self.evaluation_counter += pop.shape[0]
+                            # Phase 2: Integrate genes from the diverse Pareto front
+                            arr = np.arange(front.shape[0])
+                            np.random.shuffle(arr)
+                            local_front = front[arr]
+                            local_front_eval = front_eval[arr]
+
+                            nn = (pop.shape[0] - limit_idx)
+                            if nn < local_front.shape[0]:
+                                #mask = front_suppression(local_front, local_front_eval, nn, mode='objectives')
+                                mask = self._front_suppression_cd(local_front_eval, nn)
+                                local_front = local_front[mask]
+
+                            if len(local_front) > 0:
+                                actual_nn = min(nn, local_front.shape[0])
+                                inds = np.random.choice(local_front.shape[0], actual_nn, replace=True)
+                                for i in range(actual_nn):
+                                    pop[limit_idx + i, np.logical_not(pattern)] = local_front[
+                                        inds[i], np.logical_not(pattern)]
+
+                        # Final Repair & Evaluate post-exchange to guarantee valid solutions
+                        if self.exchange != 'none':
+                            pop = self.repair.do(pop)
+                            pop_eval = self.objective.evaluate(pop)
+                            self.evaluation_counter += pop.shape[0]
 
                     next_iter_counter += 1
 

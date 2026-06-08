@@ -338,6 +338,7 @@ class GlobalStorage:
             'iter_counters': self.iter_counters,
             'patterns': self.patterns,
             'next_iter': self.next_iter,
+            'change_iter': self.change_iter,
             'stop_flag': self.stop_flag,
             'evaluations': self.total_evaluations,
             'env_version': self.current_env_version,
