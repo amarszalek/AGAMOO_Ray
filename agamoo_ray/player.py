@@ -243,7 +243,8 @@ class Player(ABC):
                                 nn = min(target_size, local_front.shape[0])
                                 inds = np.random.choice(local_front.shape[0], nn, replace=True)
                                 for i in range(nn):
-                                    pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
+                                    # pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
+                                    pop[i, :] = local_front[inds[i], :]
 
                         elif (self.exchange == 'original') and (best is not None):
                             for i in range(len(best)):
