@@ -28,14 +28,14 @@ def pairwise_dominance(x: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: A boolean mask where True indicates a non-dominated solution.
     """
-    z = x[:, np.newaxis] >= x
-    z = np.all(z, axis=2)
-    # An individual cannot dominate itself
-    z[range(z.shape[0]), range(z.shape[0])] = False
+    worse_or_equal = np.all(x[:, np.newaxis] >= x, axis=2)
+    strictly_worse = np.any(x[:, np.newaxis] > x, axis=2)
 
-    # Check if a solution is dominated by ANY other solution
-    xx = np.any(z, axis=1)
-    return np.logical_not(xx)
+    is_dominated_matrix = worse_or_equal & strictly_worse
+
+    is_dominated = np.any(is_dominated_matrix, axis=1)
+
+    return ~is_dominated
 
 
 def get_not_dominated(populations_eval: np.ndarray) -> np.ndarray:
@@ -49,12 +49,12 @@ def get_not_dominated(populations_eval: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: A boolean mask representing non-dominated solutions.
     """
-    if CEXT:
-        mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
-        cutils.cget_not_dominated(populations_eval, mask)
-        mask = mask.astype(bool)
-    else:
-        mask = pairwise_dominance(populations_eval)
+    #if CEXT:
+    #    mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
+    #    cutils.cget_not_dominated(populations_eval, mask)
+    #    mask = mask.astype(bool)
+    #else:
+    mask = pairwise_dominance(populations_eval)
     return mask
 
 
