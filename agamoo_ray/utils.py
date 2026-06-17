@@ -49,12 +49,12 @@ def get_not_dominated(populations_eval: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: A boolean mask representing non-dominated solutions.
     """
-    #if CEXT:
-    #    mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
-    #    cutils.cget_not_dominated(populations_eval, mask)
-    #    mask = mask.astype(bool)
-    #else:
-    mask = pairwise_dominance(populations_eval)
+    if CEXT:
+        mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
+        cutils.cget_not_dominated(populations_eval, mask)
+        mask = mask.astype(bool)
+    else:
+        mask = pairwise_dominance(populations_eval)
     return mask
 
 
