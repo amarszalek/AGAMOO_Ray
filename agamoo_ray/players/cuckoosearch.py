@@ -91,7 +91,7 @@ class CuckooSearch(Player):
 
         if global_state is not None and len(global_state.get('front', [])) > 1:
             front = global_state['front']
-            front_eval = global_state['front_eval'][:,self.objective.obj-1]
+            front_eval = global_state['front_eval'][:,self.objective.obj]
             best_nest = front[np.argmin(front_eval)].copy()
             best_fitness = np.min(front_eval)
         else:
