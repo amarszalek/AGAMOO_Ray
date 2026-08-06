@@ -86,8 +86,8 @@ class CuckooSearch(Player):
 
         evaluation_counter: int = 0
         bounds_arr = np.array(self.objective.bounds)
-        a = bounds_arr[pattern, 0]
-        b = bounds_arr[pattern, 1]
+        a = bounds_arr[:, 0]
+        b = bounds_arr[:, 1]
 
         if global_state is not None and len(global_state.get('front', [])) > 1:
             front = global_state['front']
@@ -103,7 +103,8 @@ class CuckooSearch(Player):
 
         for i in range(pop.shape[0]):
             step_size = self.alpha * self._levy_flight() * (temp_pop[i] - best_nest)
-            new_nest = temp_pop[i] + step_size * np.random.randn(self.dim)
+            new_nest_all = temp_pop[i] + step_size * np.random.randn(self.dim)
+            new_nest = np.where(pattern, new_nest_all, temp_pop[i])
             new_nest = np.clip(new_nest, a, b)
 
             new_nest = self.repair.do(new_nest.reshape((1,-1)))
@@ -125,7 +126,8 @@ class CuckooSearch(Player):
             if np.random.rand() < self.pa:
                 step_size = np.random.rand() * (temp_pop[np.random.randint(0, temp_pop.shape[0])] -
                                                 temp_pop[np.random.randint(0, temp_pop.shape[0])])
-                new_nest = temp_pop[i] + step_size
+                new_nest_all = temp_pop[i] + step_size
+                new_nest = np.where(pattern, new_nest_all, temp_pop[i])
                 new_nest = np.clip(new_nest, a, b)
 
                 new_nest = self.repair.do(new_nest.reshape((1, -1)))
