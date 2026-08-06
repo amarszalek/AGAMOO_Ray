@@ -35,7 +35,7 @@ class CuckooSearch(Player):
                 - 'beta': Parametr rozkładu Lévy'ego.
                 - 'alpha': Mnożnik skoku (współczynnik skali).
                 - 'bounds': Krotka z ograniczeniami (min_bound, max_bound).
-                - 'strategy' (str): Selection strategy ('algorithm' or 'nature').
+                - 'strategy' (str): Selection strategy ('algorithm' or 'nature')
             objective (Objective): The objective function to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
             gens (str): Gene allocation strategy ('pattern' or 'all').
