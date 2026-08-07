@@ -215,7 +215,8 @@ class Player(ABC):
                     best = global_state['best']
                     exchange_iter = global_state['exchange_iter']
 
-                    if self.iteration % exchange_iter == 0:
+                    if (self.iteration % exchange_iter == 0) and (self.exchange != 'none'):
+                        modified_mask = np.zeros(pop.shape[0], dtype=bool)
                         if ('front_random' in self.exchange) and (len(front) > 0):
                             proc = 100
                             se = self.exchange.split('_')
@@ -235,6 +236,7 @@ class Player(ABC):
                                 # Inject non-optimized genes from random Pareto front members
                                 #pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
                                 pop[i, :] = front[inds[i], :]
+                                modified_mask[i] = True
                         elif ('front_sup' in self.exchange) and (len(front) > 0):
                             proc = 100
                             se = self.exchange.split('_')
@@ -262,11 +264,13 @@ class Player(ABC):
                                 for i in range(nn):
                                     # pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
                                     pop[i, :] = local_front[inds[i], :]
+                                    modified_mask[i] = True
 
                         elif (self.exchange == 'original') and (best is not None):
                             for i in range(len(best)):
                                 if (i != obj_idx) and (best[i] is not None):
                                     pop[:, patterns[i]] = best[i][patterns[i]]
+                            modified_mask[:] = True
 
                         elif (self.exchange == 'cross_sbx') and (len(front) > 0):
                             eta = 15.0
@@ -303,6 +307,9 @@ class Player(ABC):
                             if lower_bounds is not None:
                                 pop = np.clip(pop, lower_bounds, upper_bounds)
 
+                            modified_individuals = np.any(do_crossover, axis=1)
+                            modified_mask[modified_individuals] = True
+
                         elif (self.exchange == 'cross') and (len(front) > 0):
                             n_pop, n_vars = pop.shape
 
@@ -327,6 +334,9 @@ class Player(ABC):
 
                             if lower_bounds is not None:
                                 pop = np.clip(pop, lower_bounds, upper_bounds)
+
+                            modified_individuals = np.any(do_crossover, axis=1)
+                            modified_mask[modified_individuals] = True
 
                         elif ('mix' in self.exchange) and (best is not None) and (len(front) > 0):
                             proc = 50
@@ -358,12 +368,21 @@ class Player(ABC):
                                 for i in range(actual_nn):
                                     pop[limit_idx + i, np.logical_not(pattern)] = local_front[
                                         inds[i], np.logical_not(pattern)]
+                            modified_mask[:] = True
 
                         # Final Repair & Evaluate post-exchange to guarantee valid solutions
-                        if self.exchange != 'none':
-                            pop = self.repair.do(pop)
-                            pop_eval = self.objective.evaluate(pop)
-                            self.evaluation_counter += pop.shape[0]
+
+                        if np.any(modified_mask):
+                            repaired_subset = self.repair.do(pop[modified_mask])
+                            pop[modified_mask] = repaired_subset
+                            new_evals = self.objective.evaluate(repaired_subset)
+                            pop_eval[modified_mask] = new_evals
+                            self.evaluation_counter += np.sum(modified_mask)
+
+                        #if self.exchange != 'none':
+                        #    pop = self.repair.do(pop)
+                        #    pop_eval = self.objective.evaluate(pop)
+                        #    self.evaluation_counter += pop.shape[0]
 
                     next_iter_counter += 1
 

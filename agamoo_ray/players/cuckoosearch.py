@@ -88,6 +88,7 @@ class CuckooSearch(Player):
         bounds_arr = np.array(self.objective.bounds)
         a = bounds_arr[:, 0]
         b = bounds_arr[:, 1]
+        domain_range = b - a
 
         n_pop = pop.shape[0]
 
@@ -104,7 +105,8 @@ class CuckooSearch(Player):
         temp_pop_eval = deepcopy(pop_eval)
 
         # Generujemy krok dla całej populacji na raz
-        step_size = self.alpha * self._levy_flight(n_pop) * (temp_pop - best_nest)
+        dynamic_alpha = self.alpha * domain_range
+        step_size = dynamic_alpha * self._levy_flight(n_pop) * (temp_pop - best_nest)
         new_nests_all = temp_pop + step_size * np.random.randn(n_pop, self.dim)
 
         # Aplikujemy wzorzec genów (broadcasting zadziała automatycznie)
