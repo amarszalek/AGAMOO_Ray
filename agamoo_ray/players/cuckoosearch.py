@@ -55,17 +55,17 @@ class CuckooSearch(Player):
 
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
 
-    def _levy_flight(self):
+    def _levy_flight(self, n: int = 1):
         """
-        Generuje krok z rozkładu Lévy'ego przy użyciu algorytmu Mantegny.
-        Formuła: s = u / |v|^(1/beta)
+        Zwektoryzowana wersja lotów Lévy'ego.
+        Zwraca macierz o wymiarach (n, dim).
         """
         num = math.gamma(1 + self.beta) * math.sin(math.pi * self.beta / 2)
         den = math.gamma((1 + self.beta) / 2) * self.beta * (2 ** ((self.beta - 1) / 2))
         sigma = (num / den) ** (1 / self.beta)
 
-        u = np.random.normal(0, sigma, self.dim)
-        v = np.random.normal(0, 1, self.dim)
+        u = np.random.normal(0, sigma, (n, self.dim))
+        v = np.random.normal(0, 1, (n, self.dim))
 
         step = u / (np.abs(v) ** (1 / self.beta))
         return step
@@ -89,6 +89,8 @@ class CuckooSearch(Player):
         a = bounds_arr[:, 0]
         b = bounds_arr[:, 1]
 
+        n_pop = pop.shape[0]
+
         if global_state is not None and len(global_state.get('front', [])) > 1:
             front = global_state['front']
             front_eval = global_state['front_eval'][:,self.objective.obj]
@@ -101,50 +103,63 @@ class CuckooSearch(Player):
         temp_pop = deepcopy(pop)
         temp_pop_eval = deepcopy(pop_eval)
 
-        for i in range(pop.shape[0]):
-            step_size = self.alpha * self._levy_flight() * (temp_pop[i] - best_nest)
-            new_nest_all = temp_pop[i] + step_size * np.random.randn(self.dim)
-            new_nest = np.where(pattern, new_nest_all, temp_pop[i])
-            new_nest = np.clip(new_nest, a, b)
+        # Generujemy krok dla całej populacji na raz
+        step_size = self.alpha * self._levy_flight(n_pop) * (temp_pop - best_nest)
+        new_nests_all = temp_pop + step_size * np.random.randn(n_pop, self.dim)
 
-            new_nest = self.repair.do(new_nest.reshape((1,-1)))
-            new_nest_eval = self.objective.evaluate(new_nest)
-            evaluation_counter += new_nest.shape[0]
+        # Aplikujemy wzorzec genów (broadcasting zadziała automatycznie)
+        new_nests = np.where(pattern, new_nests_all, temp_pop)
+        new_nests = np.clip(new_nests, a, b)
 
-            # Jeśli nowe gniazdo jest lepsze, zastąp je
-            if new_nest_eval[0] < temp_pop_eval[i]:
-                temp_pop[i] = new_nest[0]
-                temp_pop_eval[i] = new_nest_eval[0]
+        # Naprawa i ocena całej populacji w jednym wywołaniu (batching)
+        new_nests = self.repair.do(new_nests)
+        new_nests_eval = self.objective.evaluate(new_nests).flatten()  # Upewniamy się, że to wektor 1D
+        evaluation_counter += n_pop
 
-                # Aktualizacja najlepszego rozwiązania globalnego
-                if new_nest_eval[0] < best_fitness:
-                    best_fitness = new_nest_eval[0]
-                    best_nest = new_nest[0].copy()
+        # Zastępujemy tylko te gniazda, które są lepsze (maska logiczna NumPy)
+        better_mask = new_nests_eval < temp_pop_eval
+        temp_pop[better_mask] = new_nests[better_mask]
+        temp_pop_eval[better_mask] = new_nests_eval[better_mask]
 
-        # 2. Odkrywanie gniazd (z prawdopodobieństwem pa) i budowanie nowych
-        for i in range(temp_pop.shape[0]):
-            if np.random.rand() < self.pa:
-                step_size = np.random.rand() * (temp_pop[np.random.randint(0, temp_pop.shape[0])] -
-                                                temp_pop[np.random.randint(0, temp_pop.shape[0])])
-                new_nest_all = temp_pop[i] + step_size
-                new_nest = np.where(pattern, new_nest_all, temp_pop[i])
-                new_nest = np.clip(new_nest, a, b)
+        # Wyznaczamy, które gniazda zostały odkryte przez gospodarza
+        abandon_mask = np.random.rand(n_pop) < self.pa
+        num_abandoned = np.sum(abandon_mask)
 
-                new_nest = self.repair.do(new_nest.reshape((1, -1)))
-                new_nest_eval = self.objective.evaluate(new_nest)
-                evaluation_counter += new_nest.shape[0]
+        if num_abandoned > 0:
+            # Wybieramy losowe pary gniazd do wyznaczenia kierunku skoku
+            idx1 = np.random.randint(0, n_pop, num_abandoned)
+            idx2 = np.random.randint(0, n_pop, num_abandoned)
 
-                if self.strategy == 'algorithm':
-                    if new_nest_eval[0] < temp_pop_eval[i]:
-                        temp_pop[i] = new_nest[0]
-                        temp_pop_eval[i] = new_nest_eval[0]
-                else:
-                    temp_pop[i] = new_nest[0]
-                    temp_pop_eval[i] = new_nest_eval[0]
+            # Wektoryzacja skoku (używamy reshape(num_abandoned, 1) do prawidłowego mnożenia macierzy)
+            random_steps = np.random.rand(num_abandoned, 1) * (temp_pop[idx1] - temp_pop[idx2])
+            new_nests_all_ab = temp_pop[abandon_mask] + random_steps
 
-                if new_nest_eval[0] < best_fitness:
-                    best_fitness = new_nest_eval[0]
-                    best_nest = new_nest[0].copy()
+            new_nests_ab = np.where(pattern, new_nests_all_ab, temp_pop[abandon_mask])
+            new_nests_ab = np.clip(new_nests_ab, a, b)
+
+            # Naprawa i ocena porzuconych gniazd
+            new_nests_ab = self.repair.do(new_nests_ab)
+            new_nests_ab_eval = self.objective.evaluate(new_nests_ab).flatten()
+            evaluation_counter += num_abandoned
+
+            if self.strategy == 'algorithm':
+                # Zachłanne zastąpienie (tylko lepsze rozwiązania)
+                current_eval_ab = temp_pop_eval[abandon_mask]
+                better_mask_ab = new_nests_ab_eval < current_eval_ab
+
+                # Aktualizacja oryginalnych macierzy za pomocą masek
+                temp_pop_abandoned = temp_pop[abandon_mask]
+                temp_pop_abandoned[better_mask_ab] = new_nests_ab[better_mask_ab]
+                temp_pop[abandon_mask] = temp_pop_abandoned
+
+                temp_pop_eval_abandoned = temp_pop_eval[abandon_mask]
+                temp_pop_eval_abandoned[better_mask_ab] = new_nests_ab_eval[better_mask_ab]
+                temp_pop_eval[abandon_mask] = temp_pop_eval_abandoned
+
+            else:
+                # 'nature': Bezwarunkowe zastąpienie gniazda
+                temp_pop[abandon_mask] = new_nests_ab
+                temp_pop_eval[abandon_mask] = new_nests_ab_eval
 
         return temp_pop, temp_pop_eval, evaluation_counter
 
