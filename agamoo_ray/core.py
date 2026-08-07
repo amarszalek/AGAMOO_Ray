@@ -421,12 +421,12 @@ class GlobalStorage:
 
         try:
             nobj = data['nobj']
-            iteration = data.get('iteration', 0)
+            iteration_delta = data.get('iteration', 0)
 
             if self.verbose:
                 logger.info(f"GlobalStorage received update from objective {nobj}")
 
-            self.iter_counters[nobj] = iteration
+            self.iter_counters[nobj] += iteration_delta
 
             # Return early if it's just a heartbeat
             if data.get('iter_flag', False):

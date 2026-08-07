@@ -92,6 +92,8 @@ class Player(ABC):
         next_iter_counter = 0
         iters_pop: Optional[np.ndarray] = None
 
+        delta_iter = 0
+
         lower_bounds, upper_bounds = None, None
         if self.objective.bounds is not None:
             bounds_arr = np.array(self.objective.bounds)
@@ -164,6 +166,7 @@ class Player(ABC):
                             traceback.print_exc()
 
                     self.iteration += 1
+                    delta_iter += 1
                     self.evaluation_counter += neval
 
                     # 2. Synchronization and Heartbeat Logic
@@ -183,7 +186,7 @@ class Player(ABC):
                             'population': pop.copy(),
                             'population_eval': pop_eval.copy(),
                             'evaluation_counter': self.evaluation_counter,
-                            'iteration': self.iteration,
+                            'iteration': delta_iter,
                             'iter_flag': False
                         }, env_version=self.env_version))
                         if self.verbose:
@@ -191,14 +194,16 @@ class Player(ABC):
 
                         self.evaluation_counter = 0
                         next_iter_counter = 0
+                        delta_iter = 0
                         iters_pop = iters.copy()
                     else:
                         # Heartbeat update (only iteration info)
                         self.storage.update.remote({
                             'nobj': obj_idx,
                             'iter_flag': True,
-                            'iteration': self.iteration
+                            'iteration': delta_iter
                         }, env_version=self.env_version)
+                        delta_iter = 0
                         # Yield execution briefly to avoid hammering the object store
                         time.sleep(0.001)
 
