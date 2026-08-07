@@ -609,6 +609,9 @@ class GlobalStorage:
             for idx, res in enumerate(results):
                 obj_idx = target_objs[idx]
                 new_front_eval[:, obj_idx] = res
+                self.evaluations_count[obj_idx] += snapshot_front.shape[0]
+
+        self.total_evaluations = np.min(self.evaluations_count)
 
         # Re-filtering - remove solutions that became dominated after the environment change
         mask = get_not_dominated(new_front_eval)
