@@ -121,6 +121,7 @@ class Player(ABC):
             'iteration': 0,
             'iter_flag': False
         })
+        self.evaluation_counter = 0
 
         try:
             while True:
@@ -188,6 +189,7 @@ class Player(ABC):
                         if self.verbose:
                             logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
 
+                        self.evaluation_counter = 0
                         next_iter_counter = 0
                         iters_pop = iters.copy()
                     else:
@@ -195,8 +197,7 @@ class Player(ABC):
                         self.storage.update.remote({
                             'nobj': obj_idx,
                             'iter_flag': True,
-                            'iteration': self.iteration,
-                            'evaluation_counter': self.evaluation_counter
+                            'iteration': self.iteration
                         }, env_version=self.env_version)
                         # Yield execution briefly to avoid hammering the object store
                         time.sleep(0.001)

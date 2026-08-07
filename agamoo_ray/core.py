@@ -459,7 +459,7 @@ class GlobalStorage:
             neval = data['evaluation_counter']
 
             if neval > 0:
-                self.evaluations_count[nobj] = neval
+                self.evaluations_count[nobj] += neval
             self.total_evaluations = np.min(self.evaluations_count)
 
             # Update the Best Solution for the corresponding objective
