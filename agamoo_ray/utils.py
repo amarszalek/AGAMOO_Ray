@@ -38,10 +38,13 @@ def pairwise_dominance(x: np.ndarray) -> np.ndarray:
     return ~is_dominated
 
 
-def get_not_dominated(populations_eval: np.ndarray) -> np.ndarray:
+def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.ndarray:
     """
     Filters a population to extract the non-dominated Pareto front.
     Utilizes a C-extension if available for performance, otherwise falls back to NumPy.
+    - If epsilon > 0.0: Applies Grid Epsilon-Dominance (Thins the front).
+    - If epsilon < 0.0: Applies Alpha Dominance (Thickens the front, keeps slightly dominated solutions).
+    - If epsilon == 0.0: Classic Pareto Dominance.
 
     Args:
         populations_eval (np.ndarray): Array of evaluated objective values.
@@ -49,13 +52,52 @@ def get_not_dominated(populations_eval: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: A boolean mask representing non-dominated solutions.
     """
-    if CEXT:
-        mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
-        cutils.cget_not_dominated(populations_eval, mask)
-        mask = mask.astype(bool)
+
+    if epsilon > 0.0:
+        # --- Siatkowa Epsilon-Dominacja (Grid Epsilon-Dominance) ---
+        boxes = np.floor(populations_eval / epsilon)
+
+        worse_or_equal = np.all(boxes[:, np.newaxis] >= boxes, axis=2)
+        strictly_worse = np.any(boxes[:, np.newaxis] > boxes, axis=2)
+        is_dominated_box = np.any(worse_or_equal & strictly_worse, axis=1)
+
+        box_mask = ~is_dominated_box
+        valid_indices = np.where(box_mask)[0]
+
+        # Filtrowanie duplikatów wewnątrz tego samego boksu (zostawiamy punkt najbliżej ideału boksu)
+        unique_boxes = {}
+        for idx in valid_indices:
+            box_tuple = tuple(boxes[idx])
+            dist = np.sum(populations_eval[idx])
+
+            if box_tuple not in unique_boxes or dist < unique_boxes[box_tuple][1]:
+                unique_boxes[box_tuple] = (idx, dist)
+
+        final_mask = np.zeros(populations_eval.shape[0], dtype=bool)
+        for idx, _ in unique_boxes.values():
+            final_mask[idx] = True
+
+        return final_mask
+    elif epsilon < 0.0:
+        # --- Alpha Dominancja (Relaxed Dominance) ---
+        tol = abs(epsilon)
+        # Rozwiązanie j (wiersz) dominuje i (kolumna/newaxis) tylko gdy j <= i - tol
+        # (czyli i >= j + tol we wszystkich kryteriach jednocześnie).
+        # Ponieważ tol > 0, warunek ten implikuje, że 'i' jest silnie gorsze.
+        is_significantly_worse = np.all(populations_eval[:, np.newaxis] >= populations_eval + tol, axis=2)
+
+        # 'i' odpada, tylko jeśli znaleziono przynajmniej jedno 'j', które jest silnie lepsze
+        is_dominated = np.any(is_significantly_worse, axis=1)
+
+        return ~is_dominated
     else:
-        mask = pairwise_dominance(populations_eval)
-    return mask
+        if CEXT:
+            mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
+            cutils.cget_not_dominated(populations_eval, mask)
+            mask = mask.astype(bool)
+        else:
+            mask = pairwise_dominance(populations_eval)
+        return mask
 
 
 def pairwise_distance(x: np.ndarray) -> np.ndarray:

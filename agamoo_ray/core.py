@@ -32,7 +32,8 @@ class AGAMOO:
                  front_f: Optional[Callable] = None,
                  sup_mode: str = 'objectives',
                  verbose: bool = False,
-                 log_freq: int = 0):
+                 log_freq: int = 0,
+                 epsilon: float = 0.0):
 
         """
         Initializes the AGAMOO framework.
@@ -48,6 +49,7 @@ class AGAMOO:
             front_f (Callable, optional): Custom filtering function for the Pareto front.
             verbose (bool): Enables detailed logging if True.
             log_freq (int): Frequency of logging the global state for convergence analysis.
+            epsilon (float): Epsilon parameter for dominance.
         """
 
         self.max_eval = max_eval
@@ -62,6 +64,7 @@ class AGAMOO:
         self.assign_gens = assign_gens
         self.log_freq = log_freq
         self.sup_mode = sup_mode
+        self.epsilon = epsilon
 
         self.env_version = 0
 
@@ -119,7 +122,7 @@ class AGAMOO:
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.exchange_iter, self.next_iter,
             self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
-            ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq,
+            ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq, epsilon=self.epsilon
         )
         return self.storage
 
@@ -287,7 +290,8 @@ class GlobalStorage:
                  sup_mode: str = 'objectives',
                  verbose: bool = False,
                  ref_holder: Optional[Any] = None,
-                 log_freq=0):
+                 log_freq: int = 0,
+                 epsilon: float = 0.0):
 
         self.nvars = nvars
         self.nobjs = nobjs
@@ -299,6 +303,7 @@ class GlobalStorage:
         self.max_front_tol = max_front_tol
         self.front_f = front_f
         self.sup_mode = sup_mode
+        self.epsilon = epsilon
 
         self.current_env_version = 0
         self.current_env_params = {}
@@ -506,7 +511,7 @@ class GlobalStorage:
 
             # Non-dominated selection
             if len(self.front) > 1:
-                mask = get_not_dominated(self.front_eval)
+                mask = get_not_dominated(self.front_eval, epsilon=self.epsilon)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
@@ -614,7 +619,7 @@ class GlobalStorage:
         self.total_evaluations = np.min(self.evaluations_count)
 
         # Re-filtering - remove solutions that became dominated after the environment change
-        mask = get_not_dominated(new_front_eval)
+        mask = get_not_dominated(new_front_eval, epsilon=self.epsilon)
         filtered_front = snapshot_front[mask]
         filtered_front_eval = new_front_eval[mask]
 
