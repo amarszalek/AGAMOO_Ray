@@ -33,7 +33,8 @@ class AGAMOO:
                  sup_mode: str = 'objectives',
                  verbose: bool = False,
                  log_freq: int = 0,
-                 epsilon: float = 0.0):
+                 epsilon: float = 0.0,
+                 obj_map: Optional[List[int]] = None):
 
         """
         Initializes the AGAMOO framework.
@@ -50,6 +51,7 @@ class AGAMOO:
             verbose (bool): Enables detailed logging if True.
             log_freq (int): Frequency of logging the global state for convergence analysis.
             epsilon (float): Epsilon parameter for dominance.
+            obj_map:
         """
 
         self.max_eval = max_eval
@@ -65,7 +67,7 @@ class AGAMOO:
         self.log_freq = log_freq
         self.sup_mode = sup_mode
         self.epsilon = epsilon
-
+        self.obj_map = obj_map
         self.env_version = 0
 
         self.players: List[Any] = []
@@ -112,7 +114,7 @@ class AGAMOO:
             ray.actor.ActorHandle: Handle to the created GlobalStorage actor.
         """
         self.nvars = nvars
-        self.nobjs = nobjs
+        self.nobjs = nobjs # To jest teraz liczba REALNYCH kryteriów
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True, include_dashboard=False)
@@ -122,7 +124,8 @@ class AGAMOO:
         self.storage = GlobalStorage.options(num_cpus=num_cpus).remote(
             nvars, nobjs, self.max_eval, self.change_iter, self.exchange_iter, self.next_iter,
             self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
-            ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq, epsilon=self.epsilon
+            ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq, epsilon=self.epsilon,
+            obj_map=self.obj_map
         )
         return self.storage
 
@@ -278,7 +281,7 @@ class GlobalStorage:
 
     def __init__(self,
                  nvars: int,
-                 nobjs: int,
+                 nobjs: int, # Liczba REALNYCH funkcji celu
                  max_eval: int,
                  change_iter: int,
                  exchange_iter: int,
@@ -291,10 +294,21 @@ class GlobalStorage:
                  verbose: bool = False,
                  ref_holder: Optional[Any] = None,
                  log_freq: int = 0,
-                 epsilon: float = 0.0):
+                 epsilon: float = 0.0,
+                 obj_map: Optional[List[int]] = None):
 
         self.nvars = nvars
-        self.nobjs = nobjs
+        #self.nobjs = nobjs
+        self.real_nobjs = nobjs
+        # --- LOGIKA WARIANTÓW OBJ_MAP ---
+        self.use_obj_map = obj_map is not None
+        if self.use_obj_map:
+            self.obj_map = obj_map
+            self.num_trackers = len(self.obj_map)
+        else:
+            self.obj_map = list(range(self.real_nobjs))
+            self.num_trackers = self.real_nobjs
+
         self.max_eval = max_eval
         self.change_iter = change_iter
         self.exchange_iter = exchange_iter
@@ -340,10 +354,14 @@ class GlobalStorage:
         Creates a snapshot of the global state in the Ray Plasma Store and
         asynchronously passes the reference to the RefHolder.
         """
+
+        # Konstruowanie wirtualnego wektora best, aby każdy tracker otrzymał poprawny cel
+        virtual_best = [self.best[self.obj_map[p]] for p in range(self.num_trackers)]
+
         snapshot_data = {
             'front': self.front,
             'front_eval': self.front_eval,
-            'best': self.best,
+            'best': virtual_best,
             'iter_counters': self.iter_counters,
             'patterns': self.patterns,
             'next_iter': self.next_iter,
@@ -351,7 +369,8 @@ class GlobalStorage:
             'stop_flag': self.stop_flag,
             'evaluations': self.total_evaluations,
             'env_version': self.current_env_version,
-            'env_params': self.current_env_params
+            'env_params': self.current_env_params,
+            'use_obj_map': self.use_obj_map
         }
         # ray.put stores data in shared memory and returns a lightweight ObjectRef
         ref = ray.put(snapshot_data)
@@ -362,19 +381,19 @@ class GlobalStorage:
     def reset(self) -> None:
         """Resets the internal state before a new optimization run."""
         self.front = np.empty((0, self.nvars))
-        self.front_eval = np.empty((0, self.nobjs))
-        self.best = [None] * self.nobjs
+        self.front_eval = np.empty((0, self.real_nobjs)) # Front z zachowaniem oryginalnej wymiarowości!
+        self.best = [None] * self.real_nobjs
 
-        self.iter_counters = np.zeros(self.nobjs)
-        self.evaluations_count = np.zeros(self.nobjs)
-        self.evaluations_time = np.zeros(self.nobjs)
-        self.repair_time = np.zeros(self.nobjs)
+        self.iter_counters = np.zeros(self.num_trackers)
+        self.evaluations_count = np.zeros(self.num_trackers)
+        self.evaluations_time = np.zeros(self.num_trackers)
+        self.repair_time = np.zeros(self.num_trackers)
 
         self.stop_flag = False
         self.min_iter_pop = 0
 
         # Initialize variable patterns (genes)
-        self.patterns = assigning_gens(self.nvars, self.nobjs)
+        self.patterns = assigning_gens(self.nvars, self.num_trackers)
         self.total_evaluations = 0
 
         self._refresh_snapshot_ref()
@@ -425,13 +444,17 @@ class GlobalStorage:
         """
 
         try:
-            nobj = data['nobj']
-            iteration_delta = data.get('iteration', 0)
+            # Odczyt identyfikacji gracza i mapowanie na wirtualny/realny indeks
+            player_id = data.get('player_id', data['nobj'])
+            tracker_idx = player_id if self.use_obj_map else data['nobj']
+            real_obj = self.obj_map[player_id] if self.use_obj_map else data['nobj']
+
+            #nobj = data['nobj']
+            iteration_delta = data.get('iteration_delta', data.get('iteration', 0))
+            self.iter_counters[tracker_idx] += iteration_delta
 
             if self.verbose:
-                logger.info(f"GlobalStorage received update from objective {nobj}")
-
-            self.iter_counters[nobj] += iteration_delta
+                logger.info(f"GlobalStorage received update from objective {tracker_idx}")
 
             # Return early if it's just a heartbeat
             if data.get('iter_flag', False):
@@ -444,14 +467,23 @@ class GlobalStorage:
             # Dynamic Variable Assignment logic
             min_iter = np.min(self.iter_counters)
             if min_iter - self.min_iter_pop >= self.change_iter:
-                if self.assign_gens=='random':
-                    self.patterns = assigning_gens(self.nvars, self.nobjs)
-                elif self.assign_gens=='adaptive_linear':
-                    self.patterns = adaptive_linear_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
+                # Rozdmuchiwanie frontu dla modeli uczenia maszynowego w DVA
+                if self.use_obj_map:
+                    target_front_eval = np.zeros((len(self.front), self.num_trackers))
+                    for p in range(self.num_trackers):
+                        target_front_eval[:, p] = self.front_eval[:, self.obj_map[p]]
+                else:
+                    target_front_eval = self.front_eval
+                if self.assign_gens == 'random':
+                    self.patterns = assigning_gens(self.nvars, self.num_trackers)
+                elif self.assign_gens == 'adaptive_linear':
+                    self.patterns = adaptive_linear_assigning_gens(self.front, target_front_eval, self.nvars,
+                                                                   self.num_trackers)
                 elif self.assign_gens == 'adaptive_sparsity':
-                    self.patterns = adaptive_sparsity_gens(self.front, self.front_eval, self.nvars, self.nobjs)
-                elif self.assign_gens=='adaptive_shap':
-                    self.patterns = adaptive_shap_assigning_gens(self.front, self.front_eval, self.nvars, self.nobjs)
+                    self.patterns = adaptive_sparsity_gens(self.front, target_front_eval, self.nvars, self.num_trackers)
+                elif self.assign_gens == 'adaptive_shap':
+                    self.patterns = adaptive_shap_assigning_gens(self.front, target_front_eval, self.nvars,
+                                                                 self.num_trackers)
                 else:
                     raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
                 self.min_iter_pop = min_iter
@@ -464,36 +496,36 @@ class GlobalStorage:
             neval = data['evaluation_counter']
 
             if neval > 0:
-                self.evaluations_count[nobj] += neval
+                self.evaluations_count[tracker_idx] += neval
             self.total_evaluations = np.min(self.evaluations_count)
 
             # Update the Best Solution for the corresponding objective
             if len(pop_eval_partial) > 0:
                 best_idx = np.argmin(pop_eval_partial)
-                self.best[nobj] = pop[best_idx].copy()
+                self.best[real_obj] = pop[best_idx].copy()  # Best jest wspólny dla realnego kryterium
 
-            pop_eval = np.zeros((pop.shape[0], self.nobjs))
-            pop_eval[:, nobj] = pop_eval_partial
+            pop_eval = np.zeros((pop.shape[0], self.real_nobjs))
+            pop_eval[:, real_obj] = pop_eval_partial
 
             futures = []
             target_objs = []
             num_workers = len(self.evaluators)
 
             # Evaluate the population on remaining objectives
-            for i in range(self.nobjs):
-                if i != nobj and num_workers > 0:
+            for i in range(self.real_nobjs):
+                if i != real_obj and num_workers > 0:
                     evaluator = self.evaluators[self.eval_rr_index % num_workers]
                     self.eval_rr_index += 1
                     futures.append(evaluator.evaluate.remote(pop, i))
                     target_objs.append(i)
 
-            # Gather results asynchronously
             if futures:
                 results = await asyncio.gather(*futures)
                 for idx, res in enumerate(results):
                     obj_idx = target_objs[idx]
                     pop_eval[:, obj_idx] = res
-                    self.evaluations_count[obj_idx] += pop.shape[0]
+                    # Koszt ewaluacji obciąża tracker gracza, który dostarczył pierwotną populację
+                    self.evaluations_count[tracker_idx] += pop.shape[0]
 
             self.total_evaluations = np.min(self.evaluations_count)
 
@@ -597,10 +629,10 @@ class GlobalStorage:
         num_workers = len(self.evaluators)
 
         # Prepare a new matrix for updated objective function values
-        new_front_eval = np.zeros((len(snapshot_front), self.nobjs))
+        new_front_eval = np.zeros((len(snapshot_front), self.real_nobjs))
 
         # Dispatch re-evaluation of old X points for all objectives
-        for i in range(self.nobjs):
+        for i in range(self.real_nobjs):
             if num_workers > 0:
                 evaluator = self.evaluators[self.eval_rr_index % num_workers]
                 self.eval_rr_index += 1
@@ -614,7 +646,14 @@ class GlobalStorage:
             for idx, res in enumerate(results):
                 obj_idx = target_objs[idx]
                 new_front_eval[:, obj_idx] = res
-                self.evaluations_count[obj_idx] += snapshot_front.shape[0]
+
+                if self.use_obj_map:
+                    # Jeśli wielu graczy współdzieli to kryterium, obciążamy ich równo
+                    for p in range(self.num_trackers):
+                        if self.obj_map[p] == obj_idx:
+                            self.evaluations_count[p] += snapshot_front.shape[0]
+                else:
+                    self.evaluations_count[obj_idx] += snapshot_front.shape[0]
 
         self.total_evaluations = np.min(self.evaluations_count)
 

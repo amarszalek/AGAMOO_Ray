@@ -91,7 +91,6 @@ class Player(ABC):
         obj_idx = self.objective.obj
         next_iter_counter = 0
         iters_pop: Optional[np.ndarray] = None
-
         delta_iter = 0
 
         lower_bounds, upper_bounds = None, None
@@ -116,11 +115,12 @@ class Player(ABC):
 
         # Dispatch initial population to the Global Storage asynchronously
         self.storage.update.remote({
+            'player_id': self.num,
             'nobj': obj_idx,
             'population': pop,
             'population_eval': pop_eval,
             'evaluation_counter': self.evaluation_counter,
-            'iteration': 0,
+            'iteration_delta': 0,
             'iter_flag': False
         })
         self.evaluation_counter = 0
@@ -145,6 +145,9 @@ class Player(ABC):
                     if self.verbose:
                         logger.info(f"Player {self.num} received stop signal. Terminating loop.")
                     break
+
+                use_obj_map = global_state.get('use_obj_map', False)
+                tracker_idx = self.num if use_obj_map else obj_idx
 
                 # Retrieve current locus assignment (DVA mechanism)
                 patterns = global_state['patterns']
@@ -171,7 +174,7 @@ class Player(ABC):
 
                     # 2. Synchronization and Heartbeat Logic
                     iters = global_state['iter_counters'].copy()
-                    iters[obj_idx] = self.iteration
+                    iters[tracker_idx] = self.iteration
 
                     iters_mask = np.zeros(len(iters), dtype=bool)
                     for i in range(len(iters)):
@@ -182,11 +185,12 @@ class Player(ABC):
                     # Transmit full payload if other players have progressed, else send a lightweight heartbeat
                     if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
                         ray.get(self.storage.update.remote({
+                            'player_id': self.num,
                             'nobj': obj_idx,
                             'population': pop.copy(),
                             'population_eval': pop_eval.copy(),
                             'evaluation_counter': self.evaluation_counter,
-                            'iteration': delta_iter,
+                            'iteration_delta': delta_iter,
                             'iter_flag': False
                         }, env_version=self.env_version))
                         if self.verbose:
@@ -199,9 +203,10 @@ class Player(ABC):
                     else:
                         # Heartbeat update (only iteration info)
                         self.storage.update.remote({
+                            'player_id': self.num,
                             'nobj': obj_idx,
                             'iter_flag': True,
-                            'iteration': delta_iter
+                            'iteration_delta': delta_iter
                         }, env_version=self.env_version)
                         delta_iter = 0
                         # Yield execution briefly to avoid hammering the object store

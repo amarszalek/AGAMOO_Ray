@@ -48,6 +48,7 @@ def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.
 
     Args:
         populations_eval (np.ndarray): Array of evaluated objective values.
+        epsilon (float): Epsilon-Dominance threshold.
 
     Returns:
         np.ndarray: A boolean mask representing non-dominated solutions.
