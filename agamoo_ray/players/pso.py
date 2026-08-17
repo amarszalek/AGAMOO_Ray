@@ -45,15 +45,13 @@ class PSO(Player):
         self.c1: float = player_param.get('c1', 1.49445)
         self.c2: float = player_param.get('c2', 1.49445)
         self.create: str = player_param.get('create', 'lhs')
-        if self.create == 'lhs':
-            self.create_population = self.create_population_lhs
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
 
-        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
+        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create_method)
 
         # Wewnętrzny stan roju (inicjalizowany przy pierwszym kroku)
         self.velocities: Optional[np.ndarray] = None

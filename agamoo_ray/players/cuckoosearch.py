@@ -50,14 +50,12 @@ class CuckooSearch(Player):
         self.max_eval: int = player_param.get('max_eval', 10000)
         self.strategy: str = player_param.get('strategy', 'algorithm')
         self.create: str = player_param.get('create', 'lhs')
-        if self.create == 'lhs':
-            self.create_population = self.create_population_lhs
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
         if self.seed is not None:
             np.random.seed(self.seed + num)
 
-        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
+        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create_method)
 
     def _levy_flight(self, n: int = 1):
         """

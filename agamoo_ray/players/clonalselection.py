@@ -51,15 +51,12 @@ class ClonalSelection(Player):
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
         self.create: str = player_param.get('create', 'lhs')
-        if self.create == 'lhs':
-            self.create_population = self.create_population_lhs
-
         self.seed  = player_param.get('seed', None)
         if self.seed is not None:
             np.random.seed(self.seed+num)
 
         # Initialize the base Player class
-        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop)
+        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create_method)
 
     def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
