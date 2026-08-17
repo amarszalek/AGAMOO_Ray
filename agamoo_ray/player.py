@@ -289,12 +289,12 @@ class Player(ABC):
                             front_idx = np.random.choice(len(front), n_pop, replace=True)
                             p2 = front[front_idx]
 
-                            # --- Prawdopodobieństwo ---
+                            # --- Cross Probability ---
                             do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
                             do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
                             do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var #& ~pattern
 
-                            # --- Matematyka SBX ---
+                            # --- Simulated Binary Crossover (SBX) Math ---
                             u = np.random.rand(n_pop, n_vars)
                             beta = np.zeros_like(u)
 
@@ -326,19 +326,19 @@ class Player(ABC):
                             front_idx = np.random.choice(len(front), n_pop, replace=True)
                             p2 = front[front_idx]
 
-                            # --- Prawdopodobieństwo ---
+                            # --- Cross Probability ---
                             do_cross_ind = np.random.rand(n_pop) <= 0.9 #cross_prob
                             do_cross_var = np.random.rand(n_pop, n_vars) <= 0.9 #var_prob
                             do_crossover = do_cross_ind[:, np.newaxis] & do_cross_var #& ~pattern
 
-                            # 3. Matematyka Krzyżowania Arytmetycznego
-                            # Losujemy wagę alfa [0, 1] dla każdego krzyżowanego genu niezależnie
+                            # --- Arithmetic Crossover Math ---
+                            # Draw an alpha weight [0, 1] for each crossed gene independently
                             alpha = np.random.rand(n_pop, n_vars)
 
-                            # Wyliczamy punkt dokładnie pomiędzy Rodzicem 1 a Rodzicem 2
+                            # Calculate the exact point between Parent 1 and Parent 2
                             child = alpha * p1 + (1.0 - alpha) * p2
 
-                            # 4. Podmiana genów
+                            # Gene substitution
                             pop = np.where(do_crossover, child, p1)
 
                             if lower_bounds is not None:
