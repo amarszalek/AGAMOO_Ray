@@ -49,10 +49,7 @@ class ClonalSelection(Player):
         self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
-        self.scalar_freq: int = player_param.get('scalar_freq', 0)
-        self.max_eval: int = player_param.get('max_eval', 10000)
-        self.theta: float = player_param.get('theta', 5.0)
-        self.persistent_w = None
+
         self.seed  = player_param.get('seed', None)
         if self.seed is not None:
             np.random.seed(self.seed+num)
@@ -83,83 +80,14 @@ class ClonalSelection(Player):
         temp_pop = deepcopy(pop)
         temp_pop_eval = deepcopy(pop_eval)
 
-        # --- DYNAMICZNA SKALARYZACJA (Surogatowa) ---
-        use_scalarization = False
-
         # BEZPIECZNA ITERACJA: Pobieramy aktualną iterację z globalnego licznika dla tego gracza
         current_iter = 0
         if global_state is not None and 'iter_counters' in global_state:
             # self.objective.obj to indeks przypisany do tego gracza (np. 0, 1, 2...)
             current_iter = int(global_state['iter_counters'][self.objective.obj])
 
-        if global_state is not None and len(global_state.get('front', [])) > 5 and self.scalar_freq > 0 :
-            # Wprowadzamy cykle: np. 5 iteracji specjalizacji + 5 iteracji kompromisu
-            cycle_length = self.scalar_freq
-            phase_step = current_iter % cycle_length
-
-            if phase_step >= 0:#self.scalar_freq:
-                use_scalarization = True
-                front = global_state['front']
-                front_eval = global_state['front_eval']
-                #_, unique_indices = np.unique(front_eval, axis=0, return_index=True)
-                #front = front[unique_indices]
-                #front_eval = front_eval[unique_indices]
-
-                current_evals = global_state.get('evaluations', 0)
-                progress = min(current_evals / max(1, self.max_eval), 1.0)
-
-                # GENEROWANIE WEKTORA TYLKO NA POCZĄTKU FAZY (lub gdy go brak)
-                if phase_step == 0 or self.persistent_w is None:
-                    w_focused = np.full(front_eval.shape[1], 0.01)
-                    w_focused[self.objective.obj] = 1.0
-                    w_random = np.random.uniform(0.01, 1.0, front_eval.shape[1])
-
-                    w_raw = (1.0 - progress) * w_focused + (progress * w_random)
-                    self.persistent_w = w_raw / np.linalg.norm(w_raw)
-
-                # Algorytm przez całą fazę (np. przez 5 iteracji) używa zapamiętanego wektora!
-                w = self.persistent_w
-
-                # Obliczenie punktu idealnego i nadiru z globalnego frontu
-                ideal = np.min(front_eval, axis=0)
-                nadir = np.max(front_eval, axis=0)
-                denom = nadir - ideal
-                denom[denom < 1e-9] = 1e-9
-
-
-                theta = self.theta * (progress ** 2)
-                #theta = self.theta
-
-                # Funkcja pomocnicza: Estymacja sąsiada + Obliczenie PBI
-                def calc_pbi(x_array, exact_evals):
-                    # Szukanie najbliższego sąsiada w przestrzeni X
-                    diff = x_array[:, np.newaxis, :] - front[np.newaxis, :, :]
-                    dist_sq = np.sum(diff ** 2, axis=2)
-                    nearest_idx = np.argmin(dist_sq, axis=1)
-
-                    # Estymacja ocen wszystkich kryteriów i podmiana znanej wartości
-                    est_evals = front_eval[nearest_idx].copy()
-                    est_evals[:, self.objective.obj] = exact_evals
-
-                    # Normalizacja wyników do przedziału [0, 1]
-                    F_norm = (est_evals - ideal) / denom
-
-                    # Obliczanie d1 (Zbieżność) - iloczyn skalarny wektora wyniku z wektorem wag
-                    d1 = np.dot(F_norm, w)
-
-                    # Obliczanie d2 (Różnorodność) - odległość prostopadła (błąd odchylenia od wektora)
-                    projection = d1[:, np.newaxis] * w
-                    d2 = np.linalg.norm(F_norm - projection, axis=1)
-
-                    # Ostateczny wynik PBI
-                    return d1 + (theta * d2)
-
-                parent_scalar = calc_pbi(temp_pop, temp_pop_eval)
-                arg_sort = parent_scalar.argsort()
-
         # Sort population to determine affinity (lower evaluation = better rank)
-        if not use_scalarization:
-            arg_sort = temp_pop_eval.argsort()
+        arg_sort = temp_pop_eval.argsort()
 
         indices: List[int] = []
         better: List[np.ndarray] = []
@@ -197,11 +125,7 @@ class ClonalSelection(Player):
                 all_clones = np.vstack([all_clones, temp_pop])
                 all_clones_eval = np.append(all_clones_eval, temp_pop_eval)
                 # Select the absolute best individuals to form the new population
-                if use_scalarization:
-                    all_scalar = calc_pbi(all_clones, all_clones_eval)
-                    final_sort = all_scalar.argsort()
-                else:
-                    final_sort = all_clones_eval.argsort()
+                final_sort = all_clones_eval.argsort()
                 temp_pop[:, :] = all_clones[final_sort[:temp_pop.shape[0]], :]
                 temp_pop_eval[:] = all_clones_eval[final_sort[:temp_pop_eval.shape[0]]]
 
@@ -219,19 +143,11 @@ class ClonalSelection(Player):
                     clones_eval = self.objective.evaluate(clones)
                     evaluation_counter += clones.shape[0]
                     # Find the best clone among the generated batch
-                    if use_scalarization:
-                        scalar_c = calc_pbi(clones, clones_eval)
-                        argmin = scalar_c.argmin()
-                        if scalar_c[argmin] < parent_scalar[arg]:
-                            indices.append(arg)
-                            better.append(clones[argmin])
-                            better_eval.append(clones_eval[argmin])
-                    else:
-                        argmin = clones_eval.argmin()
-                        if clones_eval[argmin] < temp_pop_eval[arg]:
-                            indices.append(arg)
-                            better.append(clones[argmin])
-                            better_eval.append(clones_eval[argmin])
+                    argmin = clones_eval.argmin()
+                    if clones_eval[argmin] < temp_pop_eval[arg]:
+                        indices.append(arg)
+                        better.append(clones[argmin])
+                        better_eval.append(clones_eval[argmin])
 
             if len(better) > 0:
                 temp_pop[indices] = np.stack(better)
@@ -240,14 +156,9 @@ class ClonalSelection(Player):
         # Receptor Editing (Suppression): Replace worst individuals with random new ones
         d = int(pop.shape[0] * self.sup)
         if d > 0:
-            if use_scalarization:
-                inds = parent_scalar.argsort()[-d:]  # Najgorsi trafiają do kasacji
-            else:
-                inds = temp_pop_eval.argsort()[-d:]
-
+            inds = temp_pop_eval.argsort()[-d:]
             pop_sup = np.zeros((inds.shape[0], self.objective.n_var))
             for i in range(inds.shape[0]):
-
                 # Zamiast 'uniform_mutate', używamy inteligentnego krzyżowania osobników z Frontu
                 if global_state is not None and len(global_state.get('front', [])) >= 2:
                     front_archive = global_state['front']
