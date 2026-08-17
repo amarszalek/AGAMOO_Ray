@@ -444,12 +444,12 @@ class GlobalStorage:
         """
 
         try:
-            # Odczyt identyfikacji gracza i mapowanie na wirtualny/realny indeks
+            # Read player identification and map to virtual/real index
             player_id = data.get('player_id', data['nobj'])
             tracker_idx = player_id if self.use_obj_map else data['nobj']
             real_obj = self.obj_map[player_id] if self.use_obj_map else data['nobj']
 
-            #nobj = data['nobj']
+            # Fetch iteration delta and apply it to the respective tracker's counter
             iteration_delta = data.get('iteration_delta', data.get('iteration', 0))
             self.iter_counters[tracker_idx] += iteration_delta
 
@@ -467,7 +467,7 @@ class GlobalStorage:
             # Dynamic Variable Assignment logic
             min_iter = np.min(self.iter_counters)
             if min_iter - self.min_iter_pop >= self.change_iter:
-                # Rozdmuchiwanie frontu dla modeli uczenia maszynowego w DVA
+                # Expand the front into virtual dimensions for DVA machine learning models
                 if self.use_obj_map:
                     target_front_eval = np.zeros((len(self.front), self.num_trackers))
                     for p in range(self.num_trackers):
@@ -486,6 +486,7 @@ class GlobalStorage:
                                                                  self.num_trackers)
                 else:
                     raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
+
                 self.min_iter_pop = min_iter
 
             self.lpatterns.append(self.patterns.copy())
@@ -502,16 +503,15 @@ class GlobalStorage:
             # Update the Best Solution for the corresponding objective
             if len(pop_eval_partial) > 0:
                 best_idx = np.argmin(pop_eval_partial)
-                self.best[real_obj] = pop[best_idx].copy()  # Best jest wspólny dla realnego kryterium
+                self.best[real_obj] = pop[best_idx].copy()
 
             pop_eval = np.zeros((pop.shape[0], self.real_nobjs))
             pop_eval[:, real_obj] = pop_eval_partial
 
+            # Evaluate the population on remaining objectives
             futures = []
             target_objs = []
             num_workers = len(self.evaluators)
-
-            # Evaluate the population on remaining objectives
             for i in range(self.real_nobjs):
                 if i != real_obj and num_workers > 0:
                     evaluator = self.evaluators[self.eval_rr_index % num_workers]
@@ -524,7 +524,7 @@ class GlobalStorage:
                 for idx, res in enumerate(results):
                     obj_idx = target_objs[idx]
                     pop_eval[:, obj_idx] = res
-                    # Koszt ewaluacji obciąża tracker gracza, który dostarczył pierwotną populację
+                    # The evaluation cost burdens the tracker of the player who supplied the initial population
                     self.evaluations_count[tracker_idx] += pop.shape[0]
 
             self.total_evaluations = np.min(self.evaluations_count)

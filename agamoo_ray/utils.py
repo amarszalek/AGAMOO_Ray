@@ -55,9 +55,8 @@ def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.
     """
 
     if epsilon > 0.0:
-        # --- Siatkowa Epsilon-Dominacja (Grid Epsilon-Dominance) ---
+        # --- Grid Epsilon-Dominance ---
         boxes = np.floor(populations_eval / epsilon)
-
         worse_or_equal = np.all(boxes[:, np.newaxis] >= boxes, axis=2)
         strictly_worse = np.any(boxes[:, np.newaxis] > boxes, axis=2)
         is_dominated_box = np.any(worse_or_equal & strictly_worse, axis=1)
@@ -65,33 +64,32 @@ def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.
         box_mask = ~is_dominated_box
         valid_indices = np.where(box_mask)[0]
 
-        # Filtrowanie duplikatów wewnątrz tego samego boksu (zostawiamy punkt najbliżej ideału boksu)
+        # Filter duplicates within the same box (keep the point closest to the box's ideal point)
         unique_boxes = {}
         for idx in valid_indices:
             box_tuple = tuple(boxes[idx])
             dist = np.sum(populations_eval[idx])
-
             if box_tuple not in unique_boxes or dist < unique_boxes[box_tuple][1]:
                 unique_boxes[box_tuple] = (idx, dist)
 
         final_mask = np.zeros(populations_eval.shape[0], dtype=bool)
         for idx, _ in unique_boxes.values():
             final_mask[idx] = True
-
         return final_mask
+
     elif epsilon < 0.0:
         # --- Alpha Dominancja (Relaxed Dominance) ---
         tol = abs(epsilon)
-        # Rozwiązanie j (wiersz) dominuje i (kolumna/newaxis) tylko gdy j <= i - tol
-        # (czyli i >= j + tol we wszystkich kryteriach jednocześnie).
-        # Ponieważ tol > 0, warunek ten implikuje, że 'i' jest silnie gorsze.
+        # Solution j (row) dominates i (column/newaxis) only if j <= i - tol
+        # This condition implies that 'i' is significantly worse in all criteria simultaneously.
         is_significantly_worse = np.all(populations_eval[:, np.newaxis] >= populations_eval + tol, axis=2)
 
-        # 'i' odpada, tylko jeśli znaleziono przynajmniej jedno 'j', które jest silnie lepsze
+        # 'i' is discarded only if at least one 'j' is found that is significantly better
         is_dominated = np.any(is_significantly_worse, axis=1)
-
         return ~is_dominated
+
     else:
+        # --- Classic Pareto Dominance ---
         if CEXT:
             mask = np.zeros(populations_eval.shape[0], dtype=np.int32)
             cutils.cget_not_dominated(populations_eval, mask)
@@ -218,52 +216,49 @@ def _dual_omni_suppression(front: np.ndarray, front_eval: np.ndarray, front_max:
     if n <= 0:
         return np.ones(front_eval.shape[0], dtype=bool)
 
-    # 1. Zabezpieczenie ekstremów (punktów idealnych) w obu przestrzeniach!
+    # Safeguard extremes (ideal points) in both spaces
     ideal_f = np.argmin(front_eval, axis=0)
     ideal_x = np.argmin(front, axis=0)
     ideal = np.unique(np.concatenate((ideal_f, ideal_x)))
 
-    # 2. Normalizacja przestrzeni celów (F)
+    # Normalize Objective Space (F)
     front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0)) + 1.0
     front_eval_norm = front_eval_norm / np.max(front_eval_norm, axis=0)
 
-    # 3. Normalizacja przestrzeni zmiennych (X)
+    # Normalize Decision Variable Space (X)
     front_norm = front + np.abs(np.min(front, axis=0)) + 1.0
     front_norm = front_norm / np.max(front_norm, axis=0)
 
-    # 4. Obliczenie macierzy odległości dla par (tylko RAZ)
+    # Calculate pairwise distance matrices (computed ONLY ONCE)
     z_f = pairwise_distance(front_eval_norm)
     z_x = pairwise_distance(front_norm)
 
-    # 5. FUZJA DUALNA (Serce Omni-Optimizera)
-    # Odległość dualna to MAKSIMUM z odległości F i X.
-    # Jeśli punkty są blisko w F, ale daleko w X, Z_dual będzie duże -> przetrwają.
+    # DUAL FUSION (Core of Omni-Optimizer)
+    # Dual distance is the MAXIMUM of F and X distances.
+    # If points are close in F but far in X, Z_dual will be large -> they survive.
     z_dual = np.maximum(z_f, z_x)
-
     mask = np.ones(front_eval.shape[0], dtype=bool)
 
-    # Ignorujemy górny trójkąt i przekątną macierzy odległości
+    # Ignore upper triangle and diagonal of the distance matrix
     t = np.tril(z_dual) + np.triu(np.ones_like(z_dual) * 1000000)
     arg = np.argsort(t, axis=None)
     indx_i, indx_j = np.unravel_index(arg, t.shape)
 
-    # 6. Błyskawiczne, iteracyjne usuwanie bez ponownego mnożenia macierzy
+    # Lightning-fast iterative removal without re-multiplying matrices
     while n > 0:
         ii = indx_i[0]
         mask[ii] = False
 
-        # Usuwamy usunięty punkt ze spisu posortowanych odległości
+        # Remove the deleted point from the sorted distances list
         tmp = indx_i[indx_i != ii]
         indx_j = indx_j[indx_i != ii]
         indx_i = tmp.copy()
-
         tmp = indx_j[indx_j != ii]
         indx_i = indx_i[indx_j != ii]
         indx_j = tmp.copy()
-
         n -= 1
 
-    # Przywrócenie punktów ekstremalnych
+    # Restore boundary points
     for i in ideal:
         mask[i] = True
 
@@ -358,70 +353,69 @@ def adaptive_linear_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nv
 
 def adaptive_sparsity_gens(front, front_eval, nvars, nobjs):
     """
-    Inteligentny przydział genów (Robin Hood DVA).
-    Odbiera geny algorytmom z dobrymi wynikami i oddaje tym, które utknęły,
-    wymuszając przeskakiwanie między lokalnymi minimami.
+    Intelligent gene allocation (Robin Hood DVA).
+    Takes genes from algorithms with good performance and gives them to those
+    that are stuck, forcing jumps between local minima.
     """
 
-    # Zabezpieczenie: jeśli front jest za mały do statystyki, zwracamy losowy przydział
+    # Safeguard: if the front is too small for statistics, return a random assignment
     if len(front) < 20:
         return assigning_gens(nvars, nobjs)
 
-    # --- ETAP 1: Obliczenie 'Potrzeby' (Need) dla każdego kryterium ---
+    # --- PHASE 1: Calculate 'Need' for each objective ---
     ideal = np.min(front_eval, axis=0)
     nadir = np.max(front_eval, axis=0)
 
-    # Unikamy dzielenia przez zero (jeśli front zapadł się do jednego punktu)
+    # Avoid division by zero (if the front collapsed to a single point)
     denom = nadir - ideal
     denom[denom < 1e-9] = 1e-9
 
-    # Normalizacja wyników do przedziału [0, 1]
+    # # Normalize results to [0, 1] interval
     F_norm = (front_eval - ideal) / denom
 
-    # Wyznaczamy potrzebę.
-    # mean_perf: im wyższa średnia, tym dalej populacja jest od minimum (gorzej).
-    # spread: odchylenie standardowe - duże rozproszenie sugeruje brak konwergencji.
+    # Determine the need
+    # mean_perf: the higher the average, the further the population is from the minimum (worse).
+    # spread: standard deviation - large dispersion suggests a lack of convergence.
     mean_perf = np.mean(F_norm, axis=0)
     spread = np.std(F_norm, axis=0)
 
-    # Wskaźnik Robin Hooda
+    # Robin Hood Indicator
     need = mean_perf + spread
     need_weights = need / (np.sum(need) + 1e-9)
 
-    # --- ETAP 2: Obliczenie wpływu (korelacji) genów na kryteria ---
+    # --- PHASE 2: Calculate the influence (correlation) of genes on criteria ---
     C = np.zeros((nobjs, nvars))
     for i in range(nobjs):
         for j in range(nvars):
             std_x = np.std(front[:, j])
             std_f = np.std(front_eval[:, i])
 
-            # Zabezpieczenie przed zerową wariancją (zmienna bezużyteczna w tym kroku)
+            # Safeguard against zero variance (useless variable in this step)
             if std_x > 1e-6 and std_f > 1e-6:
                 corr = np.abs(np.corrcoef(front[:, j], front_eval[:, i])[0, 1])
             else:
-                corr = np.random.rand() * 0.01  # minimalny losowy szum
+                corr = np.random.rand() * 0.01  # minimal random noise
             C[i, j] = corr
 
-    # --- ETAP 3: Przeciąganie liny (Ważenie Korelacji) ---
-    # Gracz w potrzebie sztucznie zwiększa atrakcyjność genów dla siebie
+    # --- PHASE 3: Tug of War (Correlation Weighting) ---
+    # A player in need artificially increases the attractiveness of genes for themselves
     Weighted_C = C * need_weights[:, np.newaxis]
 
-    # Przydział każdego genu do gracza, który zgłosił na niego "największe zapotrzebowanie"
+    # Assign each gene to the player who expressed the "greatest demand" for it
     assignment = np.argmax(Weighted_C, axis=0)
-
     patterns = np.zeros((nobjs, nvars), dtype=bool)
     for j in range(nvars):
         patterns[assignment[j], j] = True
 
-    # --- ETAP 4: Zabezpieczenie przed bezczynnością (Safeguard) ---
-    # Każdy Gracz musi dostać co najmniej 1 gen, w przeciwnym razie wystąpi Deadlock!
+    # --- PHASE 4: Safeguard against inactivity (Deadlock Prevention) ---
+    # Every Player must receive at least 1 gene, otherwise a Deadlock will occur!
     for i in range(nobjs):
         if np.sum(patterns[i, :]) == 0:
-            # Znajdź najbogatszego Gracza (z największą liczbą przypisanych genów)
+            # Find the wealthiest Player (with the highest number of assigned genes)
             richest = np.argmax(np.sum(patterns, axis=1))
             richest_genes = np.where(patterns[richest, :])[0]
 
-            # Odbierz najbogatszemu gen, który ma na jego kryterium NAJMNIEJSZY wpływ
+            # Take a gene from the wealthiest player that has the LEAST impact on their criterion
             if len(richest_genes) > 1:
                 least_important_gene = richest_genes[np.argmin(C[richest, richest_genes])]
                 patterns[richest, least_important_gene] = False
