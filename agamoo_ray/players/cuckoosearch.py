@@ -55,7 +55,7 @@ class CuckooSearch(Player):
         if self.seed is not None:
             np.random.seed(self.seed + num)
 
-        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create_method)
+        super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create)
 
     def _levy_flight(self, n: int = 1):
         """
