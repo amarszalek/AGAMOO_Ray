@@ -36,6 +36,7 @@ class CuckooSearch(Player):
                 - 'alpha': Mnożnik skoku (współczynnik skali).
                 - 'bounds': Krotka z ograniczeniami (min_bound, max_bound).
                 - 'strategy' (str): Selection strategy ('algorithm' or 'nature')
+                - 'create' (str): Create population method ('uniform', 'lhs')
             objective (Objective): The objective function to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
             gens (str): Gene allocation strategy ('pattern' or 'all').
@@ -48,6 +49,9 @@ class CuckooSearch(Player):
         self.alpha: float = player_param.get('alpha', 0.01)
         self.max_eval: int = player_param.get('max_eval', 10000)
         self.strategy: str = player_param.get('strategy', 'algorithm')
+        self.create: str = player_param.get('create', 'lhs')
+        if self.create == 'lhs':
+            self.create_population = self.create_population_lhs
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
         if self.seed is not None:

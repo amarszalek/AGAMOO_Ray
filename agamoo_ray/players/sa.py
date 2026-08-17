@@ -36,6 +36,7 @@ class SimulatedAnnealing(Player):
                 - 'T_min': Minimum temperature (Temperatura minimalna).
                 - 'step_size': Wielkość kroku perturbacji jako ułamek domeny (np. 0.05 to 5%).
                 - 'max_eval': Max number of evaluations (instead of cooling_rate)
+                - 'create' (str): Create population method ('uniform', 'lhs')
             objective (Objective): The objective function to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
             gens (str): Gene allocation strategy ('pattern' or 'all').
@@ -48,6 +49,9 @@ class SimulatedAnnealing(Player):
         self.T_min: float = player_param.get('T_min', 1e-5)
         self.step_size: float = player_param.get('step_size', 0.05)
         self.max_eval: int = player_param.get('max_eval', 10000)
+        self.create: str = player_param.get('create', 'lhs')
+        if self.create == 'lhs':
+            self.create_population = self.create_population_lhs
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
 

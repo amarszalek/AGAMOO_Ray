@@ -486,6 +486,38 @@ class Player(ABC):
         best_indices = np.argsort(distances)[::-1]
         return best_indices[:max_front]
 
+    def create_population_lhs(self) -> np.ndarray:
+        """
+        Inicjalizacja populacji za pomocą Latin Hypercube Sampling (LHS).
+        Rozwiązuje problem pustych 'dziur' i 'skupisk' w przestrzeni decyzyjnej
+        poprzez zagwarantowanie równomiernego podziału dziedziny każdego wymiaru.
+        """
+        # Przygotowanie pustej macierzy [pop_size, n_vars] w przedziale [0, 1]
+        pop_size, n_vars = self.npop, self.objective.n_var
+        samples = np.empty((pop_size, n_vars))
+
+        # Generowanie jednostajnej hiperkostki
+        for i in range(n_vars):
+            # 1. Losowa permutacja przypisująca osobnika do "koszyka" (siatki na szachownicy)
+            bins = np.random.permutation(pop_size)
+
+            # 2. Losowe mikrostrojenie (szum) ściśle wewnątrz przydzielonego koszyka
+            offset = np.random.uniform(0.0, 1.0, size=pop_size)
+
+            # 3. Złożenie wartości w jeden wymiar i normalizacja do przedziału [0.0, 1.0]
+            samples[:, i] = (bins + offset) / pop_size
+
+        # Skalowanie wygenerowanej hiperkostki [0, 1] do rzeczywistych ograniczeń problemu
+        if hasattr(self.objective, 'bounds') and self.objective.bounds is not None:
+            bounds_arr = np.array(self.objective.bounds)
+            lower_bounds = bounds_arr[:, 0]
+            upper_bounds = bounds_arr[:, 1]
+
+            # Równanie prostej interpolacji: Min + Wartość_Z_Zakresu_0_1 * (Max - Min)
+            samples = lower_bounds + samples * (upper_bounds - lower_bounds)
+
+        return samples
+
 
 
 @ray.remote

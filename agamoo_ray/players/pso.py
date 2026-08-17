@@ -33,6 +33,7 @@ class PSO(Player):
                 - 'w': Inertia weight (Współczynnik bezwładności).
                 - 'c1': Cognitive parameter (Współczynnik uczenia lokalnego - dążenie do pbest).
                 - 'c2': Social parameter (Współczynnik uczenia globalnego - dążenie do gbest).
+                - 'create' (str): Create population method ('uniform', 'lhs')
             objective (Objective): The objective function to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
             gens (str): Gene allocation strategy ('pattern' or 'all').
@@ -43,6 +44,9 @@ class PSO(Player):
         self.w: float = player_param.get('w', 0.729)
         self.c1: float = player_param.get('c1', 1.49445)
         self.c2: float = player_param.get('c2', 1.49445)
+        self.create: str = player_param.get('create', 'lhs')
+        if self.create == 'lhs':
+            self.create_population = self.create_population_lhs
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
 

@@ -37,6 +37,7 @@ class ClonalSelection(Player):
                 - 'mutate_args' (List[float]): Probabilities/parameters for [uniform, gaussian, bound] mutations.
                 - 'sup' (float): Suppression factor (0.0 to 1.0) for diversity injection.
                 - 'strategy' (str): Selection strategy ('base' or 'all_best').
+                - 'create' (str): Create population method ('uniform', 'lhs')
             objective (Objective): The objective function (antigen) to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
             gens (str): Gene allocation strategy ('pattern' or 'all').
@@ -49,6 +50,9 @@ class ClonalSelection(Player):
         self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
+        self.create: str = player_param.get('create', 'lhs')
+        if self.create == 'lhs':
+            self.create_population = self.create_population_lhs
 
         self.seed  = player_param.get('seed', None)
         if self.seed is not None:
@@ -291,34 +295,3 @@ class ClonalSelection(Player):
         ind[mutate_mask] = np.clip(ind[mutate_mask] + noise, a, b)
         return ind
 
-    def create_population(self) -> np.ndarray:
-        """
-        Inicjalizacja populacji za pomocą Latin Hypercube Sampling (LHS).
-        Rozwiązuje problem pustych 'dziur' i 'skupisk' w przestrzeni decyzyjnej
-        poprzez zagwarantowanie równomiernego podziału dziedziny każdego wymiaru.
-        """
-        # Przygotowanie pustej macierzy [pop_size, n_vars] w przedziale [0, 1]
-        pop_size, n_vars = self.npop, self.objective.n_var
-        samples = np.empty((pop_size, n_vars))
-
-        # Generowanie jednostajnej hiperkostki
-        for i in range(n_vars):
-            # 1. Losowa permutacja przypisująca osobnika do "koszyka" (siatki na szachownicy)
-            bins = np.random.permutation(pop_size)
-
-            # 2. Losowe mikrostrojenie (szum) ściśle wewnątrz przydzielonego koszyka
-            offset = np.random.uniform(0.0, 1.0, size=pop_size)
-
-            # 3. Złożenie wartości w jeden wymiar i normalizacja do przedziału [0.0, 1.0]
-            samples[:, i] = (bins + offset) / pop_size
-
-        # Skalowanie wygenerowanej hiperkostki [0, 1] do rzeczywistych ograniczeń problemu
-        if hasattr(self.objective, 'bounds') and self.objective.bounds is not None:
-            bounds_arr = np.array(self.objective.bounds)
-            lower_bounds = bounds_arr[:, 0]
-            upper_bounds = bounds_arr[:, 1]
-
-            # Równanie prostej interpolacji: Min + Wartość_Z_Zakresu_0_1 * (Max - Min)
-            samples = lower_bounds + samples * (upper_bounds - lower_bounds)
-
-        return samples
