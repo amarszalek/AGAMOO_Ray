@@ -35,7 +35,8 @@ class SimulatedAnnealing(Player):
                 - 'T0': Initial temperature (Temperatura początkowa).
                 - 'T_min': Minimum temperature (Temperatura minimalna).
                 - 'step_size': Wielkość kroku perturbacji jako ułamek domeny (np. 0.05 to 5%).
-                - 'max_eval': Max number of evaluations (instead of cooling_rate)
+                - 'max_eval': Budget the cooling schedule is stretched over. None (default)=the global AGAMOO max_eval,
+                 so T reaches T_min when this player's tracker exhausts the budget
                 - 'create' (str): Create population method ('uniform', 'lhs')
             objective (Objective): The objective function to optimize.
             storage_actor (Any): Handle to the GlobalStorage Ray Actor.
@@ -48,7 +49,7 @@ class SimulatedAnnealing(Player):
         self.T0: float = player_param.get('T0', 100.0)
         self.T_min: float = player_param.get('T_min', 1e-5)
         self.step_size: float = player_param.get('step_size', 0.05)
-        self.max_eval: int = player_param.get('max_eval', 10000)
+        self.max_eval: Optional[int] = player_param.get('max_eval', None)
         self.create: str = player_param.get('create', 'lhs')
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
@@ -78,13 +79,15 @@ class SimulatedAnnealing(Player):
         n_pop = pop.shape[0]
 
         # Dynamic temperature calculation based on max_eval consumption
-        if (global_state is not None) and ('evaluations_count' in global_state):
+        if global_state is not None:
             # Retrieve the actual number of evaluations for this player
-            current_evals = global_state['evaluations_count'][self.objective.obj]
-            # Progress fraction: 0.0 (start) to 1.0 (end)
-            progress = min(current_evals / max(1, self.max_eval), 1.0)
-            # Exponential cooling formula perfectly stretched over time: T = T0 * (T_min / T0)^progress
-            self.T = self.T0 * ((self.T_min / self.T0) ** progress)
+            current_evals = global_state['evaluations_count'][self.tracker_idx] + self.evaluation_counter
+            budget = self.max_eval if self.max_eval is not None else global_state['max_eval']
+            if budget > 0:
+                # Progress fraction: 0.0 (start) to 1.0 (end)
+                progress = min(current_evals / budget, 1.0)
+                # Exponential cooling formula perfectly stretched over time: T = T0 * (T_min / T0)^progress
+                self.T = self.T0 * ((self.T_min / self.T0) ** progress)
 
         bounds_arr = np.array(self.objective.bounds)
         a = bounds_arr[:, 0]

@@ -408,6 +408,8 @@ class GlobalStorage:
             'exchange_iter': self.exchange_iter,
             'stop_flag': self.stop_flag,
             'evaluations': self.total_evaluations,
+            'evaluations_count': self.evaluations_count,
+            'max_eval': self.max_eval,
             'env_version': self.current_env_version,
             'env_params': self.current_env_params,
             'use_obj_map': self.use_obj_map
