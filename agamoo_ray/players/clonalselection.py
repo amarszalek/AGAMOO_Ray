@@ -58,6 +58,10 @@ class ClonalSelection(Player):
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create)
 
+    def get_identity(self) -> Tuple[int, int]:
+        """Returns (player index, criterion index)."""
+        return self.num, self.objective.obj
+
     def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
         Executes a single evolutionary cycle of the Clonal Selection algorithm.
@@ -85,7 +89,7 @@ class ClonalSelection(Player):
         current_iter = 0
         if global_state is not None and 'iter_counters' in global_state:
             # self.objective.obj to indeks przypisany do tego gracza (np. 0, 1, 2...)
-            current_iter = int(global_state['iter_counters'][self.objective.obj])
+            current_iter = int(global_state['iter_counters'][self.tracker_idx])
 
         # Sort population to determine affinity (lower evaluation = better rank)
         arg_sort = temp_pop_eval.argsort()

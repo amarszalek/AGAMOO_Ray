@@ -17,8 +17,28 @@ logger = logging.getLogger(__name__)
 
 class AGAMOO:
     """
-        Main driver class for the Asynchronous Game Theory Multi-objective
-        Optimization (AGAMOO) framework using the Ray actor model.
+    Main driver class for the Asynchronous Game Theory Multi-objective
+    Optimization (AGAMOO) framework using the Ray actor model.
+
+    This class serves as the central orchestrator for the distributed optimization process.
+    It handles the initialization of asynchronous Player actors (heuristics), the Global
+    Storage, and the Evaluator nodes. It also monitors the termination conditions and
+    provides access to the optimization results.
+
+    Attributes:
+        max_eval (int): The absolute maximum number of objective function evaluations.
+            Optimization stops when the slowest tracker reaches this limit.
+        change_iter (int): Frequency (in iterations) of executing the Dynamic Variable Assignment (DVA).
+        exchange_iter (int): Frequency of triggering Cooperative Coevolution (gene exchange between players).
+        next_iter (int): Synchronization safeguard. Determines how many iterations a fast player
+            can drift ahead before being throttled to wait for slower processes. Set to -1 to disable.
+        max_front (int): Maximum allowed size of the global Pareto front archive.
+        max_front_tol (float): Tolerance fraction for the Pareto front size before heavy suppression is triggered.
+        init_pop (str): Strategy for initial population generation (e.g., 'separate').
+        assign_gens (str): Strategy for DVA locus allocation ('random', 'adaptive_linear', 'adaptive_sparsity', 'adaptive_shap').
+        sup_mode (str): Suppression strategy used to trim the Pareto front ('objectives', 'variables', 'dual_omni').
+        epsilon (float): Dominance rigor parameter. >0 for Grid Epsilon-Dominance (thinning), <0 for Alpha-Dominance (thickening).
+        obj_map (List[int], optional): Map assigning multiple virtual players to real objective indices (Heterogeneous Island Model).
     """
     def __init__(self,
                  max_eval: int,
@@ -35,25 +55,7 @@ class AGAMOO:
                  log_freq: int = 0,
                  epsilon: float = 0.0,
                  obj_map: Optional[List[int]] = None):
-
-        """
-        Initializes the AGAMOO framework.
-
-        Args:
-            max_eval (int): Maximum number of objective function evaluations.
-            change_iter (int): Number of iterations before executing the dynamic variable assignment (DVA).
-            next_iter (int): Base iterations for the player cycle.
-            max_front (int): Maximum size of the global Pareto front archive.
-            max_front_tol (float): Tolerance for the Pareto front size before suppression triggers.
-            init_pop (str): Strategy for initial population generation.
-            assign_gens (str): Strategy for locus allocation ('random' or 'adaptive_linear').
-            front_f (Callable, optional): Custom filtering function for the Pareto front.
-            verbose (bool): Enables detailed logging if True.
-            log_freq (int): Frequency of logging the global state for convergence analysis.
-            epsilon (float): Epsilon parameter for dominance.
-            obj_map:
-        """
-
+        """Initializes the AGAMOO framework orchestrator."""
         self.max_eval = max_eval
         self.change_iter = change_iter
         self.exchange_iter = exchange_iter
@@ -93,6 +95,8 @@ class AGAMOO:
         self.evaluators = evaluator if isinstance(evaluator, list) else [evaluator]
         self.repair = repair
 
+        self._validate_setup(self.players)
+
         # Register components in the global storage
         ray.get(self.storage.set_players.remote(players))
         ray.get(self.storage.set_evaluator.remote(self.evaluators))
@@ -103,18 +107,18 @@ class AGAMOO:
 
     def create_storage(self, nvars: int, nobjs: int, num_cpus: int = 1) -> Any:
         """
-        Initializes the Ray environment and creates the GlobalStorage and RefHolder actors.
+        Initializes the Ray environment and spawns the GlobalStorage and RefHolder actors.
 
         Args:
-            nvars (int): Number of decision variables in the optimization problem.
-            nobjs (int): Number of objective functions.
-            num_cpus (int): Number of CPUs allocated for the storage actor.
+            nvars (int): Number of decision variables in the optimization problem (X-space).
+            nobjs (int): Number of REAL objective functions (F-space).
+            num_cpus (int, optional): Number of CPU cores allocated for the GlobalStorage actor. Defaults to 1.
 
         Returns:
-            ray.actor.ActorHandle: Handle to the created GlobalStorage actor.
+            ray.actor.ActorHandle: A remote handle to the instantiated GlobalStorage actor.
         """
         self.nvars = nvars
-        self.nobjs = nobjs # To jest teraz liczba REALNYCH kryteriów
+        self.nobjs = nobjs
 
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True, include_dashboard=False)
@@ -129,14 +133,50 @@ class AGAMOO:
         )
         return self.storage
 
+    def _validate_setup(self, players: List[Any]) -> None:
+        identities = ray.get([p.get_identity.remote() for p in players])
+
+        if self.obj_map is None:
+            missing = sorted(set(range(self.nobjs)) - {obj for _, obj in identities})
+            if missing:
+                raise ValueError(
+                    f"Criteria {missing} have no player assigned. Without obj_map every criterion "
+                    f"needs at least one player, otherwise its iteration and evaluation counters "
+                    f"never advance and the run never terminates."
+                )
+            return
+
+        if len(self.obj_map) != len(players):
+            raise ValueError(
+                f"obj_map has {len(self.obj_map)} entries but {len(players)} players were registered. "
+                f"With obj_map each player owns its own tracker, so it needs exactly one entry per player."
+            )
+
+        ids = sorted(num for num, _ in identities)
+        if ids != list(range(len(players))):
+            raise ValueError(
+                f"With obj_map, player ids must be exactly 0..{len(players) - 1} "
+                f"(they index obj_map, the patterns matrix and the counters). Got: {ids}."
+            )
+
+        for num, obj in identities:
+            if self.obj_map[num] != obj:
+                raise ValueError(
+                    f"obj_map[{num}] = {self.obj_map[num]} but player {num} was built with an "
+                    f"Objective for criterion {obj}."
+                )
+
     def start_optimize(self, tqdm_disable: bool = False, background: bool = False) -> None:
         """
-        Starts the asynchronous optimization process and monitors the stop conditions.
+        Starts the asynchronous optimization process and monitors global stopping conditions.
 
         Args:
-            tqdm_disable (bool): If True, disables the progress bar.
-            background (bool): If True, starts optimization in the background and returns
-                               immediately. If False, blocks until max_eval is reached.
+            tqdm_disable (bool, optional): If True, disables the console progress bar. Defaults to False.
+            background (bool, optional): If True, spawns the optimization in the background and returns
+                execution immediately. The user must manually call `stop()`. Defaults to False.
+
+        Raises:
+            ValueError: If players or storage have not been initialized prior to calling this method.
         """
         if not self.players:
             raise ValueError("Players list is empty. Initialize players first.")

@@ -15,11 +15,19 @@ logger = logging.getLogger(__name__)
 
 class Player(ABC):
     """
-    Abstract base class for an autonomous 'Player' entity in the AGAMOO framework.
+    Abstract base class representing an autonomous 'Player' entity in the AGAMOO framework.
 
-    In the Ray-based architecture, concrete implementations of this class
-    (e.g., ClonalSelection) should be decorated with @ray.remote to operate
-    as independent, asynchronous Actors representing specific optimization objectives.
+    In the Ray-based architecture, concrete implementations of this class (e.g., PSO,
+    CuckooSearch) must be decorated with `@ray.remote`. Each Player operates as an
+    independent, asynchronous Actor optimizing a specific criteria (or virtual tracker).
+
+    Attributes:
+        num (int): Unique identifier index for the player (tracker ID).
+        npop (int): Local population size managed by this specific player.
+        objective (Objective): The specific objective function (from F-space) this player aims to optimize.
+        gens (str): Gene allocation handling strategy (e.g., 'pattern', 'all').
+        exchange (str): Cooperative Coevolution strategy (e.g., 'mix', 'cross_sbx', 'front_sup').
+        create_method (str): Strategy for initializing the first population ('lhs' or 'uniform').
     """
 
     def __init__(self,
@@ -32,20 +40,7 @@ class Player(ABC):
                  verbose: bool =False,
                  init_pop: Optional[np.ndarray] = None,
                  create_method: str = 'lhs'):
-        """
-        Initializes the Player entity.
-
-        Args:
-            num (int): Unique identifier index for the player.
-            npop (int): Population size managed by this specific player.
-            objective (Objective): The specific objective function this player aims to optimize.
-            storage_actor (Any): Handle to the GlobalStorage Ray Actor.
-            gens (str): Gene allocation strategy ('pattern' or 'all').
-            exchange (str): Gene exchange strategy ('mix', 'original', 'front_random', 'front_sup').
-            verbose (bool): Enables detailed execution logging.
-            init_pop (np.ndarray, optional): Custom initial population array.
-            create_method (str): Method of creating the first population array ('uniform', 'lhs').
-        """
+        """Initializes the base Player actor."""
         self.num = num
         self.npop = npop
         self.objective = objective
@@ -61,6 +56,7 @@ class Player(ABC):
         self.ref_holder: Optional[Any] = None
         self.iteration: int = 0
         self.evaluation_counter: int = 0
+        self.tracker_idx: int = objective.obj
 
     def set_repair(self, repair: Any) -> None:
         """Assigns a custom repair mechanism for out-of-bounds solutions."""
@@ -147,10 +143,12 @@ class Player(ABC):
 
                 use_obj_map = global_state.get('use_obj_map', False)
                 tracker_idx = self.num if use_obj_map else obj_idx
+                self.tracker_idx = tracker_idx
 
                 # Retrieve current locus assignment (DVA mechanism)
                 patterns = global_state['patterns']
-                pattern = patterns[obj_idx]
+                # pattern = patterns[obj_idx]
+                pattern = patterns[tracker_idx]
                 next_iter = global_state['next_iter']
 
                 if next_iter <= 0 or next_iter - next_iter_counter > 0:
@@ -182,7 +180,7 @@ class Player(ABC):
 
                     # 3. Global Storage Update Dispatch
                     # Transmit full payload if other players have progressed, else send a lightweight heartbeat
-                    if np.all(iters_mask[:obj_idx]) and np.all(iters_mask[obj_idx + 1:]):
+                    if np.all(iters_mask[:tracker_idx]) and np.all(iters_mask[tracker_idx + 1:]):
                         ray.get(self.storage.update.remote({
                             'player_id': self.num,
                             'nobj': obj_idx,
@@ -277,7 +275,7 @@ class Player(ABC):
 
                         elif (self.exchange == 'original') and (best is not None):
                             for i in range(len(best)):
-                                if (i != obj_idx) and (best[i] is not None):
+                                if (i != tracker_idx) and (best[i] is not None):
                                     pop[:, patterns[i]] = best[i][patterns[i]]
                             modified_mask[:] = True
 
@@ -356,7 +354,7 @@ class Player(ABC):
                             # Phase 1: Integrate genes from the specific best solutions
                             limit_idx = int(pop.shape[0] * (proc / 100))
                             for i in range(len(best)):
-                                if (i != obj_idx) and (best[i] is not None):
+                                if (i != tracker_idx) and (best[i] is not None):
                                     pop[:limit_idx, patterns[i]] = best[i][patterns[i]]
 
                             # Phase 2: Integrate genes from the diverse Pareto front
@@ -408,17 +406,25 @@ class Player(ABC):
     @abstractmethod
     def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
-        Abstract method defining the core evolutionary step (e.g., Clonal Selection, Mutation).
-        Must be implemented by subclasses.
+        Executes a single evolutionary cycle of the specific metaheuristic algorithm.
+
+        This abstract method contains the core mathematical logic (e.g., mutations,
+        crossover, particle velocity updates) of the derived algorithm. It must strictly
+        adhere to the gene modification constraints dictated by the `pattern` mask.
 
         Args:
-            pop (np.ndarray): Current population matrix.
-            pop_eval (np.ndarray): Evaluated objective values for the population.
-            pattern (np.ndarray): Boolean mask indicating which decision variables this player can modify.
-            global_state: new
+            pop (np.ndarray): Current population matrix of shape (npop, nvars).
+            pop_eval (np.ndarray): Evaluated objective values for the current population.
+            pattern (np.ndarray): Boolean mask indicating which decision variables (genes)
+                this player is currently allowed to modify based on DVA.
+            global_state (Optional[Dict[str, Any]]): A snapshot of the global system state
+                retrieved from GlobalStorage (includes Pareto front, best solutions, etc.).
 
         Returns:
-            Tuple[np.ndarray, np.ndarray, int]: Updated population, updated evaluations, and number of evaluations performed.
+            Tuple[np.ndarray, np.ndarray, int]:
+                - Updated population matrix.
+                - Updated objective values.
+                - Exact number of newly performed objective function evaluations (Delta).
         """
         raise NotImplementedError('Subclasses must override the step() method.')
 
