@@ -58,6 +58,10 @@ class Player(ABC):
         self.evaluation_counter: int = 0
         self.tracker_idx: int = objective.obj
 
+    def get_identity(self) -> Tuple[int, int]:
+        """Returns (player index, criterion index)."""
+        return self.num, self.objective.obj
+
     def set_repair(self, repair: Any) -> None:
         """Assigns a custom repair mechanism for out-of-bounds solutions."""
         if repair is not None:

@@ -58,9 +58,6 @@ class ClonalSelection(Player):
         # Initialize the base Player class
         super().__init__(num, npop, objective, storage_actor, gens, exchange, verbose, init_pop, create_method=self.create)
 
-    def get_identity(self) -> Tuple[int, int]:
-        """Returns (player index, criterion index)."""
-        return self.num, self.objective.obj
 
     def step(self, pop: np.ndarray, pop_eval: np.ndarray, pattern: np.ndarray, global_state: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, np.ndarray, int]:
         """
