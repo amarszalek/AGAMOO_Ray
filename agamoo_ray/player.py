@@ -228,6 +228,9 @@ class Player(ABC):
 
                     if (self.iteration % exchange_iter == 0) and (self.exchange != 'none'):
                         modified_mask = np.zeros(pop.shape[0], dtype=bool)
+                        known_mask = np.zeros(pop.shape[0], dtype=bool)
+                        reuse = global_state.get('reuse_front_eval', False)
+
                         if ('front_random' in self.exchange) and (len(front) > 0):
                             proc = 100
                             se = self.exchange.split('_')
@@ -243,11 +246,19 @@ class Player(ABC):
                                 inds = np.random.choice(front.shape[0], nn, replace=False)
 
                             #inds = np.random.choice(front.shape[0], nn, replace=True)
-                            for i in range(nn):
+                            #for i in range(nn):
                                 # Inject non-optimized genes from random Pareto front members
                                 #pop[i, np.logical_not(pattern)] = front[inds[i], np.logical_not(pattern)]
-                                pop[i, :] = front[inds[i], :]
+                            #    pop[i, :] = front[inds[i], :]
+                            #    modified_mask[i] = True
+
+                            victims = np.argsort(pop_eval)[::-1][:nn]  # najgorsi najpierw
+                            for k, i in enumerate(victims):
+                                pop[i, :] = front[inds[k], :]
+                                pop_eval[i] = front_eval[inds[k], obj_idx]
                                 modified_mask[i] = True
+                                known_mask[i] = reuse
+
                         elif ('front_sup' in self.exchange) and (len(front) > 0):
                             proc = 100
                             se = self.exchange.split('_')
@@ -265,6 +276,7 @@ class Player(ABC):
                                 #mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
                                 mask = self._front_suppression_cd(local_front_eval, target_size)
                                 local_front = local_front[mask]
+                                local_front_eval = local_front_eval[mask]
 
                             if len(local_front) > 0:
                                 nn = min(target_size, local_front.shape[0])
@@ -272,10 +284,17 @@ class Player(ABC):
                                     inds = np.random.choice(local_front.shape[0], nn, replace=True)
                                 else:
                                     inds = np.random.choice(local_front.shape[0], nn, replace=False)
-                                for i in range(nn):
-                                    # pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
-                                    pop[i, :] = local_front[inds[i], :]
+                                #for i in range(nn):
+                                #    # pop[i, np.logical_not(pattern)] = local_front[inds[i], np.logical_not(pattern)]
+                                #    pop[i, :] = local_front[inds[i], :]
+                                #    modified_mask[i] = True
+                                victims = np.argsort(pop_eval)[::-1][:nn]
+                                for k, i in enumerate(victims):
+                                    pop[i, :] = local_front[inds[k], :]
+                                    pop_eval[i] = local_front_eval[inds[k], obj_idx]
                                     modified_mask[i] = True
+                                    known_mask[i] = reuse
+
 
                         elif (self.exchange == 'original') and (best is not None):
                             for i in range(len(best)):
@@ -383,12 +402,19 @@ class Player(ABC):
 
                         # Final Repair & Evaluate post-exchange to guarantee valid solutions
 
-                        if np.any(modified_mask):
-                            repaired_subset = self.repair.do(pop[modified_mask])
-                            pop[modified_mask] = repaired_subset
-                            new_evals = self.objective.evaluate(repaired_subset)
-                            pop_eval[modified_mask] = new_evals
-                            self.evaluation_counter += np.sum(modified_mask)
+                        #if np.any(modified_mask):
+                        #    repaired_subset = self.repair.do(pop[modified_mask])
+                        #    pop[modified_mask] = repaired_subset
+                        #    new_evals = self.objective.evaluate(repaired_subset)
+                        #    pop_eval[modified_mask] = new_evals
+                        #    self.evaluation_counter += np.sum(modified_mask)
+
+                        to_eval = modified_mask & ~known_mask
+                        if np.any(to_eval):
+                            repaired_subset = self.repair.do(pop[to_eval])
+                            pop[to_eval] = repaired_subset
+                            pop_eval[to_eval] = self.objective.evaluate(repaired_subset)
+                            self.evaluation_counter += int(np.sum(to_eval))
 
                         #if self.exchange != 'none':
                         #    pop = self.repair.do(pop)

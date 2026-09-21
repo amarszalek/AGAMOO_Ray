@@ -26,8 +26,12 @@ class AGAMOO:
     provides access to the optimization results.
 
     Attributes:
-        max_eval (int): The absolute maximum number of objective function evaluations.
-            Optimization stops when the slowest tracker reaches this limit.
+        max_eval (int): Per-tracker evaluation budget. Every objective evaluation is booked on the
+            criterion actually computed; when several trackers optimize the same criterion (obj_map),
+            evaluations performed by the storage are split equally between them, while a player's own
+            evaluations stay on its tracker. Optimization stops when the least-evaluated tracker reaches
+            this limit. The exact number of calls of each objective is reported in `objective_evals`,
+            their sum in `nfe_total`.
         change_iter (int): Frequency (in iterations) of executing the Dynamic Variable Assignment (DVA).
         exchange_iter (int): Frequency of triggering Cooperative Coevolution (gene exchange between players).
         next_iter (int): Synchronization safeguard. Determines how many iterations a fast player
@@ -54,7 +58,8 @@ class AGAMOO:
                  verbose: bool = False,
                  log_freq: int = 0,
                  epsilon: float = 0.0,
-                 obj_map: Optional[List[int]] = None):
+                 obj_map: Optional[List[int]] = None,
+                 reuse_front_eval: bool = False):
         """Initializes the AGAMOO framework orchestrator."""
         self.max_eval = max_eval
         self.change_iter = change_iter
@@ -70,6 +75,7 @@ class AGAMOO:
         self.sup_mode = sup_mode
         self.epsilon = epsilon
         self.obj_map = obj_map
+        self.reuse_front_eval = reuse_front_eval
         self.env_version = 0
 
         self.players: List[Any] = []
@@ -129,7 +135,7 @@ class AGAMOO:
             nvars, nobjs, self.max_eval, self.change_iter, self.exchange_iter, self.next_iter,
             self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
             ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq, epsilon=self.epsilon,
-            obj_map=self.obj_map
+            obj_map=self.obj_map, reuse_front_eval=self.reuse_front_eval
         )
         return self.storage
 
@@ -335,7 +341,8 @@ class GlobalStorage:
                  ref_holder: Optional[Any] = None,
                  log_freq: int = 0,
                  epsilon: float = 0.0,
-                 obj_map: Optional[List[int]] = None):
+                 obj_map: Optional[List[int]] = None,
+                 reuse_front_eval: bool = False):
 
         self.nvars = nvars
         #self.nobjs = nobjs
@@ -349,6 +356,10 @@ class GlobalStorage:
             self.obj_map = list(range(self.real_nobjs))
             self.num_trackers = self.real_nobjs
 
+        # trackers_of[i] = trackers optimizing criterion i (one entry without obj_map, the twins with it)
+        self.trackers_of = [[p for p in range(self.num_trackers) if self.obj_map[p] == i]
+                            for i in range(self.real_nobjs)]
+
         self.max_eval = max_eval
         self.change_iter = change_iter
         self.exchange_iter = exchange_iter
@@ -358,6 +369,7 @@ class GlobalStorage:
         self.front_f = front_f
         self.sup_mode = sup_mode
         self.epsilon = epsilon
+        self.reuse_front_eval = reuse_front_eval
 
         self.current_env_version = 0
         self.current_env_params = {}
@@ -412,7 +424,8 @@ class GlobalStorage:
             'max_eval': self.max_eval,
             'env_version': self.current_env_version,
             'env_params': self.current_env_params,
-            'use_obj_map': self.use_obj_map
+            'use_obj_map': self.use_obj_map,
+            'reuse_front_eval': self.reuse_front_eval
         }
         # ray.put stores data in shared memory and returns a lightweight ObjectRef
         ref = ray.put(snapshot_data)
@@ -428,6 +441,7 @@ class GlobalStorage:
 
         self.iter_counters = np.zeros(self.num_trackers)
         self.evaluations_count = np.zeros(self.num_trackers)
+        self.objective_evals = np.zeros(self.real_nobjs)
         self.evaluations_time = np.zeros(self.num_trackers)
         self.repair_time = np.zeros(self.num_trackers)
 
@@ -451,6 +465,7 @@ class GlobalStorage:
             'iterations': self.iter_counters,
             'total_evaluations': self.total_evaluations,
             'evaluations': self.evaluations_count,
+            'objective_evals': self.objective_evals,
             'stop_flag': self.stop_flag,
             'front_size': len(self.front)
         }
@@ -469,7 +484,9 @@ class GlobalStorage:
             'front': final_front,
             'front_eval': final_front_eval,
             'iter_counters': self.iter_counters,
-            'evaluations': self.evaluations_count
+            'evaluations': self.evaluations_count,
+            'objective_evals': self.objective_evals,
+            'nfe_total': float(np.sum(self.objective_evals))
         }
 
     def get_history(self) -> List[Dict[str, Any]]:
@@ -478,6 +495,14 @@ class GlobalStorage:
         Useful for live tracking or notebook visualizations without saving to disk.
         """
         return self.history
+
+    def _charge_criterion(self, obj_idx: int, n: int) -> None:
+        """Books n evaluations of criterion obj_idx: exact count per criterion,
+        budget split equally between the trackers optimizing that criterion."""
+        self.objective_evals[obj_idx] += n
+        twins = self.trackers_of[obj_idx]
+        if twins:
+            self.evaluations_count[twins] += n / len(twins)
 
     async def update(self, data: Dict[str, Any], env_version: int = 0) -> None:
         """
@@ -538,9 +563,13 @@ class GlobalStorage:
             pop_eval_partial = data['population_eval']
             neval = data['evaluation_counter']
 
+            #if neval > 0:
+            #    self.evaluations_count[tracker_idx] += neval
+            #self.total_evaluations = np.min(self.evaluations_count)
+
             if neval > 0:
                 self.evaluations_count[tracker_idx] += neval
-            self.total_evaluations = np.min(self.evaluations_count)
+                self.objective_evals[real_obj] += neval
 
             # Update the Best Solution for the corresponding objective
             if len(pop_eval_partial) > 0:
@@ -563,11 +592,16 @@ class GlobalStorage:
 
             if futures:
                 results = await asyncio.gather(*futures)
+                #for idx, res in enumerate(results):
+                #    obj_idx = target_objs[idx]
+                #    pop_eval[:, obj_idx] = res
+                #    # The evaluation cost burdens the tracker of the player who supplied the initial population
+                #    self.evaluations_count[tracker_idx] += pop.shape[0]
+
                 for idx, res in enumerate(results):
                     obj_idx = target_objs[idx]
                     pop_eval[:, obj_idx] = res
-                    # The evaluation cost burdens the tracker of the player who supplied the initial population
-                    self.evaluations_count[tracker_idx] += pop.shape[0]
+                    self._charge_criterion(obj_idx, pop.shape[0])
 
             self.total_evaluations = np.min(self.evaluations_count)
 
@@ -625,7 +659,8 @@ class GlobalStorage:
             "iteration": current_iter,
             "wall_clock_time": elapsed_time,
             "nfe_array": self.evaluations_count.copy(),
-            "nfe_total": np.sum(self.evaluations_count),
+            "nfe_total": float(np.sum(self.objective_evals)),  # było: np.sum(self.evaluations_count)
+            "objective_evals": self.objective_evals.copy(),
             "front": self.front.copy() if self.front is not None else np.array([]),
             "front_eval": self.front_eval.copy() if self.front_eval is not None else np.array([]),
             "patterns": deepcopy(self.lpatterns),
@@ -689,13 +724,15 @@ class GlobalStorage:
                 obj_idx = target_objs[idx]
                 new_front_eval[:, obj_idx] = res
 
-                if self.use_obj_map:
-                    # Jeśli wielu graczy współdzieli to kryterium, obciążamy ich równo
-                    for p in range(self.num_trackers):
-                        if self.obj_map[p] == obj_idx:
-                            self.evaluations_count[p] += snapshot_front.shape[0]
-                else:
-                    self.evaluations_count[obj_idx] += snapshot_front.shape[0]
+                #if self.use_obj_map:
+                #    # Jeśli wielu graczy współdzieli to kryterium, obciążamy ich równo
+                #    for p in range(self.num_trackers):
+                #        if self.obj_map[p] == obj_idx:
+                #            self.evaluations_count[p] += snapshot_front.shape[0]
+                #else:
+                #    self.evaluations_count[obj_idx] += snapshot_front.shape[0]
+
+                self._charge_criterion(obj_idx, snapshot_front.shape[0])
 
         self.total_evaluations = np.min(self.evaluations_count)
 
