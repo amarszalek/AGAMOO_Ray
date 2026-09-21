@@ -138,3 +138,10 @@ class PSO(Player):
 
         return new_pop, new_pop_eval, evaluation_counter
 
+    def on_environment_change(self, pop: np.ndarray, pop_eval: np.ndarray) -> None:
+        # pbest_eval belongs to the previous environment; restart personal memory from the
+        # freshly re-evaluated population. Velocities are kept (they carry no fitness info).
+        if self.pbest_pos is not None:
+            self.pbest_pos = pop.copy()
+            self.pbest_eval = pop_eval.copy()
+

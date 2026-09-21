@@ -304,6 +304,10 @@ class AGAMOO:
         #    if hasattr(p, 'update_environment'):
         #       p.update_environment.remote(**kwargs)
 
+        # 1b. Close GlobalStorage for payloads from the previous environment BEFORE the
+        #     evaluators switch, so no archive entry can mix values from two environments.
+        ray.get(self.storage.begin_environment_change.remote(self.env_version, env_params))
+
         # 2. Update evaluators and WAIT for confirmation
         # This is critical: Storage must use the updated evaluators to re-evaluate the archive
         update_futures = []
@@ -314,8 +318,10 @@ class AGAMOO:
             ray.get(update_futures)  # Block for a fraction of a second until evaluators are updated
 
         # 3. Dispatch archive re-evaluation (GlobalStorage will use the updated evaluators)
-        if reevaluate_front and self.storage:
+        if reevaluate_front:
             ray.get(self.storage.reevaluate_archive.remote(env_version=self.env_version, env_params=env_params))
+        else:
+            ray.get(self.storage.publish_environment.remote())
 
 
 @ray.remote
@@ -371,8 +377,13 @@ class GlobalStorage:
         self.epsilon = epsilon
         self.reuse_front_eval = reuse_front_eval
 
+        # current_*   : environment the storage ACCEPTS payloads for (switches first)
+        # published_* : environment players SEE in the snapshot (switches only once the
+        #               archive has been re-evaluated for it)
         self.current_env_version = 0
         self.current_env_params = {}
+        self.published_env_version = 0
+        self.published_env_params = {}
 
         self.players_handles: List[Any] = []
         self.evaluators: List[Any] = []
@@ -422,8 +433,8 @@ class GlobalStorage:
             'evaluations': self.total_evaluations,
             'evaluations_count': self.evaluations_count,
             'max_eval': self.max_eval,
-            'env_version': self.current_env_version,
-            'env_params': self.current_env_params,
+            'env_version': self.published_env_version,
+            'env_params': self.published_env_params,
             'use_obj_map': self.use_obj_map,
             'reuse_front_eval': self.reuse_front_eval
         }
@@ -504,6 +515,22 @@ class GlobalStorage:
         if twins:
             self.evaluations_count[twins] += n / len(twins)
 
+    def begin_environment_change(self, env_version: int, env_params: Dict[str, Any]) -> None:
+        """From now on only payloads computed in `env_version` are merged into the archive."""
+        self.current_env_version = env_version
+        self.current_env_params = dict(env_params)
+
+    def publish_environment(self) -> None:
+        """Makes the accepted environment visible to players through the snapshot."""
+        self.published_env_version = self.current_env_version
+        self.published_env_params = dict(self.current_env_params)
+        self._refresh_snapshot_ref()
+
+    def _sync_budget(self) -> None:
+        self.total_evaluations = np.min(self.evaluations_count)
+        if self.max_eval > 0 and self.total_evaluations >= self.max_eval:
+            self.stop_flag = True
+
     async def update(self, data: Dict[str, Any], env_version: int = 0) -> None:
         """
         Main asynchronous method handling updates from Player actors.
@@ -528,7 +555,18 @@ class GlobalStorage:
                 self._refresh_snapshot_ref()
                 return
 
-            if env_version < self.current_env_version:
+            #if env_version < self.current_env_version:
+            #    return
+
+            # The player's own evaluations happened whatever environment they belong to
+            neval = data['evaluation_counter']
+            if neval > 0:
+                self.evaluations_count[tracker_idx] += neval
+                self.objective_evals[real_obj] += neval
+
+            if env_version != self.current_env_version:
+                self._sync_budget()
+                self._refresh_snapshot_ref()
                 return
 
             # Dynamic Variable Assignment logic
@@ -561,20 +599,20 @@ class GlobalStorage:
             # Extract population data
             pop = data['population']
             pop_eval_partial = data['population_eval']
-            neval = data['evaluation_counter']
+            # neval = data['evaluation_counter']
 
             #if neval > 0:
             #    self.evaluations_count[tracker_idx] += neval
             #self.total_evaluations = np.min(self.evaluations_count)
 
-            if neval > 0:
-                self.evaluations_count[tracker_idx] += neval
-                self.objective_evals[real_obj] += neval
+            #if neval > 0:
+            #    self.evaluations_count[tracker_idx] += neval
+            #    self.objective_evals[real_obj] += neval
 
             # Update the Best Solution for the corresponding objective
-            if len(pop_eval_partial) > 0:
-                best_idx = np.argmin(pop_eval_partial)
-                self.best[real_obj] = pop[best_idx].copy()
+            #if len(pop_eval_partial) > 0:
+            #    best_idx = np.argmin(pop_eval_partial)
+            #    self.best[real_obj] = pop[best_idx].copy()
 
             pop_eval = np.zeros((pop.shape[0], self.real_nobjs))
             pop_eval[:, real_obj] = pop_eval_partial
@@ -603,7 +641,20 @@ class GlobalStorage:
                     pop_eval[:, obj_idx] = res
                     self._charge_criterion(obj_idx, pop.shape[0])
 
-            self.total_evaluations = np.min(self.evaluations_count)
+            #self.total_evaluations = np.min(self.evaluations_count)
+
+            self._sync_budget()
+
+            # The environment may have changed while the remaining criteria were being
+            # evaluated: the row would then mix values from two environments.
+            if env_version != self.current_env_version:
+                self._refresh_snapshot_ref()
+                return
+
+            # Update the Best Solution for the corresponding objective
+            if len(pop_eval_partial) > 0:
+                best_idx = np.argmin(pop_eval_partial)
+                self.best[real_obj] = pop[best_idx].copy()
 
             # Merge with the global Pareto front
             if len(self.front) == 0:
@@ -638,8 +689,8 @@ class GlobalStorage:
                 self.front_eval = self.front_eval[mask]
 
             # Stop condition check
-            if self.max_eval > 0 and self.total_evaluations >= self.max_eval:
-                self.stop_flag = True
+            #if self.max_eval > 0 and self.total_evaluations >= self.max_eval:
+            #    self.stop_flag = True
 
             self._refresh_snapshot_ref()
 
@@ -682,33 +733,27 @@ class GlobalStorage:
             pickle.dump(self.history, f)
         logger.info(f"Convergence history saved to: {filename}")
 
-    async def reevaluate_archive(self, env_version: int = 0, env_params: Dict[str, Any] = {}) -> None:
+    async def reevaluate_archive(self, env_version: int = 0, env_params: Dict[str, Any] = None) -> None:
         """
-        Re-evaluates the current Pareto front for new environmental conditions (DMOP)
-        and discards dominated solutions.
+        Re-evaluates the Pareto archive for a new environment (DMOP), removes solutions that
+        became dominated, and only then publishes the new environment to the players.
         """
 
-        self.current_env_version = env_version
-        self.current_env_params = env_params
-
-        self._refresh_snapshot_ref()
+        if env_version != self.current_env_version:  # called without begin_environment_change
+            self.begin_environment_change(env_version, env_params or {})
 
         if len(self.front) == 0:
+            self.publish_environment()
             return
 
         if self.verbose:
             logger.info("Starting asynchronous archive re-evaluation...")
 
         snapshot_front = self.front.copy()
-
-        futures = []
-        target_objs = []
-        num_workers = len(self.evaluators)
-
-        # Prepare a new matrix for updated objective function values
         new_front_eval = np.zeros((len(snapshot_front), self.real_nobjs))
 
-        # Dispatch re-evaluation of old X points for all objectives
+        futures, target_objs = [], []
+        num_workers = len(self.evaluators)
         for i in range(self.real_nobjs):
             if num_workers > 0:
                 evaluator = self.evaluators[self.eval_rr_index % num_workers]
@@ -716,35 +761,27 @@ class GlobalStorage:
                 futures.append(evaluator.evaluate.remote(snapshot_front, i))
                 target_objs.append(i)
 
-        # Asynchronously gather new results
         if futures:
-            import asyncio
             results = await asyncio.gather(*futures)
             for idx, res in enumerate(results):
                 obj_idx = target_objs[idx]
                 new_front_eval[:, obj_idx] = res
-
-                #if self.use_obj_map:
-                #    # Jeśli wielu graczy współdzieli to kryterium, obciążamy ich równo
-                #    for p in range(self.num_trackers):
-                #        if self.obj_map[p] == obj_idx:
-                #            self.evaluations_count[p] += snapshot_front.shape[0]
-                #else:
-                #    self.evaluations_count[obj_idx] += snapshot_front.shape[0]
-
                 self._charge_criterion(obj_idx, snapshot_front.shape[0])
+        self._sync_budget()
 
-        self.total_evaluations = np.min(self.evaluations_count)
+        # A newer environment change started meanwhile - its own re-evaluation takes over
+        if env_version != self.current_env_version:
+            return
 
-        # Re-filtering - remove solutions that became dominated after the environment change
         mask = get_not_dominated(new_front_eval, epsilon=self.epsilon)
-        filtered_front = snapshot_front[mask]
-        filtered_front_eval = new_front_eval[mask]
+        self.front = snapshot_front[mask]
+        self.front_eval = new_front_eval[mask]
 
-        self.front = filtered_front
-        self.front_eval = filtered_front_eval
+        # best[] held solutions chosen under the previous environment
+        for i in range(self.real_nobjs):
+            self.best[i] = self.front[np.argmin(self.front_eval[:, i])].copy()
 
-        self._refresh_snapshot_ref()
+        self.publish_environment()
         if self.verbose:
             logger.info(f"Re-evaluation completed. New archive size: {len(self.front)}")
 

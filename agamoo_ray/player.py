@@ -134,10 +134,20 @@ class Player(ABC):
 
                 global_state = ray.get(snapshot_ref)
 
+                #if global_state['env_version'] != self.env_version:
+                #    params = global_state['env_params']
+                #    params['env_version'] = global_state['env_version']
+                #    self.update_environment(**params)
+
                 if global_state['env_version'] != self.env_version:
-                    params = global_state['env_params']
+                    params = dict(global_state['env_params'])
                     params['env_version'] = global_state['env_version']
                     self.update_environment(**params)
+                    # Local fitness values were computed in the previous environment
+                    pop_eval = self.objective.evaluate(pop)
+                    self.evaluation_counter += pop.shape[0]
+                    self.on_environment_change(pop, pop_eval)
+
 
                 # Check for termination signal
                 if global_state['stop_flag']:
@@ -457,6 +467,11 @@ class Player(ABC):
                 - Exact number of newly performed objective function evaluations (Delta).
         """
         raise NotImplementedError('Subclasses must override the step() method.')
+
+    def on_environment_change(self, pop: np.ndarray, pop_eval: np.ndarray) -> None:
+        """Hook for players keeping fitness-dependent state across steps (e.g. PSO pbest).
+        Called after the population has been re-evaluated in the new environment."""
+        pass
 
     def evaluate(self, pop: np.ndarray) -> np.ndarray:
         """
