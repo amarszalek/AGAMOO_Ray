@@ -47,6 +47,8 @@ class PSO(Player):
         self.create: str = player_param.get('create', 'lhs')
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
+        self.guide: str = player_param.get('guide', 'global')  # 'global' | 'local'
+        self.k_guide: int = player_param.get('k_guide', 5)
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
@@ -96,10 +98,17 @@ class PSO(Player):
         # Ustalenie Global Best (gbest)
         if global_state is not None and len(global_state.get('front', [])) > 0:
             front = global_state['front']
-            front_eval = global_state['front_eval'][:, self.objective.obj]
-            gbest_pos = front[np.argmin(front_eval)].copy()
+            front_obj = global_state['front_eval'][:, self.objective.obj]
+            if self.guide == 'local' and len(front) > 1:
+                span = np.where(b - a > 0, b - a, 1.0)
+                P, Q = pop / span, front / span
+                d2 = (P ** 2).sum(1)[:, None] + (Q ** 2).sum(1)[None, :] - 2.0 * P @ Q.T
+                k = min(self.k_guide, front.shape[0])
+                nn = np.argpartition(d2, k - 1, axis=1)[:, :k]
+                gbest_pos = front[nn[np.arange(n_pop), np.argmin(front_obj[nn], axis=1)]]  # (n_pop, dim)
+            else:
+                gbest_pos = front[np.argmin(front_obj)].copy()
         else:
-            # Fallback, jeśli front globalny jeszcze nie istnieje
             gbest_pos = self.pbest_pos[np.argmin(self.pbest_eval)].copy()
 
         # Aktualizacja prędkości i pozycji (Pełna wektoryzacja)
@@ -122,7 +131,16 @@ class PSO(Player):
         new_pop = np.clip(new_pop, a, b)
 
         # Naprawa i Ewaluacja (Batching)
-        new_pop = self.repair.do(new_pop)
+        #new_pop = self.repair.do(new_pop)
+        if hasattr(self.repair, 'order'):
+            new_pop = self.repair.feasible(new_pop)
+            idx = self.repair.order(new_pop)
+            new_pop = np.take_along_axis(new_pop, idx, axis=1)
+            new_velocities = np.take_along_axis(new_velocities, idx, axis=1)
+            self.velocities = np.take_along_axis(self.velocities, idx, axis=1)
+        else:
+            new_pop = self.repair.do(new_pop)
+
         new_pop_eval = self.objective.evaluate(new_pop).flatten()
         evaluation_counter += n_pop
 

@@ -7,9 +7,10 @@ import traceback
 import pickle
 from copy import deepcopy
 from tqdm.auto import tqdm
-from agamoo_ray.utils import get_not_dominated, front_suppression
+from agamoo_ray.utils import get_not_dominated, front_suppression, adaptive_eta_assigning_gens, _minmax
 from agamoo_ray.utils import assigning_gens, adaptive_linear_assigning_gens, adaptive_shap_assigning_gens, adaptive_sparsity_gens
 from typing import List, Dict, Any, Optional, Callable, Union
+from scipy.spatial.distance import cdist
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,11 @@ class AGAMOO:
                  log_freq: int = 0,
                  epsilon: float = 0.0,
                  obj_map: Optional[List[int]] = None,
-                 reuse_front_eval: bool = False):
+                 reuse_front_eval: bool = False,
+                 eps_x: Optional[float] = None,
+                 alpha_relative: bool = False,
+                 prescreen: Optional[Dict[int, int]] = None
+                 ):
         """Initializes the AGAMOO framework orchestrator."""
         self.max_eval = max_eval
         self.change_iter = change_iter
@@ -76,7 +81,15 @@ class AGAMOO:
         self.epsilon = epsilon
         self.obj_map = obj_map
         self.reuse_front_eval = reuse_front_eval
+        self.eps_x = eps_x
+        self.alpha_relative = alpha_relative
+        self.prescreen = prescreen or {}
+        self.timing = None
+
         self.env_version = 0
+
+        self.timing: Optional[Dict[str, Any]] = None  # wypełniane w stop()
+        self._t_start: Optional[float] = None
 
         self.players: List[Any] = []
         self.evaluators: List[Any] = []
@@ -102,6 +115,12 @@ class AGAMOO:
         self.repair = repair
 
         self._validate_setup(self.players)
+
+        bounds = ray.get([p.get_bounds.remote() for p in self.players])
+        if all(b is not None for b in bounds):
+            if not all(b.shape == bounds[0].shape and np.allclose(b, bounds[0]) for b in bounds):
+                raise ValueError("All players must use Objectives with the same bounds.")
+            ray.get(self.storage.set_x_bounds.remote(bounds[0]))
 
         # Register components in the global storage
         ray.get(self.storage.set_players.remote(players))
@@ -135,7 +154,8 @@ class AGAMOO:
             nvars, nobjs, self.max_eval, self.change_iter, self.exchange_iter, self.next_iter,
             self.max_front, self.assign_gens, self.max_front_tol, self.front_f, self.sup_mode,
             ref_holder=self.ref_holder, verbose=self.verbose, log_freq=self.log_freq, epsilon=self.epsilon,
-            obj_map=self.obj_map, reuse_front_eval=self.reuse_front_eval
+            obj_map=self.obj_map, reuse_front_eval=self.reuse_front_eval, eps_x=self.eps_x,
+            alpha_relative=self.alpha_relative, prescreen=self.prescreen
         )
         return self.storage
 
@@ -192,6 +212,9 @@ class AGAMOO:
         # Reset global state for a fresh run
         ray.get(self.storage.reset.remote())
 
+        self.timing = None
+        self._t_start = time.perf_counter()
+
         if self.verbose:
             logger.info(f"Starting AGAMOO optimization ({'BACKGROUND' if background else 'BLOCKING'})...")
 
@@ -236,13 +259,19 @@ class AGAMOO:
             if not background:
                 self.stop()
 
-    def stop(self) -> None:
+    def stop(self, timing_timeout: float = 30.0) -> None:
         """
         Forcefully stops the optimization and terminates all Player actors.
         """
         if self.storage:
             # Set stop flag in GlobalStorage so actors can exit gracefully if possible
             ray.get(self.storage.force_stop.remote())
+
+            # Pomiary PRZED zabiciem aktorów. Gracz odpowiada dopiero po wyjściu z pętli
+            # (wywołania na aktorze idą po kolei), czyli po dokończeniu bieżącego step(),
+            # więc timing_timeout musi być dłuższy niż jeden krok najwolniejszego gracza.
+            if self.timing is None:
+                self.timing = self._collect_timing(timing_timeout)
 
             # Kill Ray actors to free resources
             for p in self.players:
@@ -258,6 +287,29 @@ class AGAMOO:
         if not self.storage:
             return None
         return ray.get(self.storage.get_status.remote())
+
+    def _collect_timing(self, timeout: float) -> Dict[str, Any]:
+        wall = None if self._t_start is None else time.perf_counter() - self._t_start
+        refs = [p.get_timing.remote() for p in self.players]
+        erefs = [e.get_timing.remote() for e in self.evaluators]
+        ready, _ = ray.wait(refs + erefs, num_returns=len(refs) + len(erefs), timeout=timeout)
+        ready = set(ready)
+
+        def fetch(ref):
+            if ref not in ready:
+                return None  # aktor nie zdążył: brak rekordu zamiast błędu
+            try:
+                return ray.get(ref)
+            except Exception:
+                return None
+
+        players = [fetch(r) for r in refs]
+        evaluators = []
+        for k, r in enumerate(erefs):
+            for rec in (fetch(r) or []):
+                rec['id'] = k
+                evaluators.append(rec)
+        return {'wall_seconds': wall, 'players': players, 'evaluators': evaluators}
 
     def get_results(self, key: Optional[str] = None) -> Any:
         """Retrieves the final optimization results from the global storage."""
@@ -348,7 +400,10 @@ class GlobalStorage:
                  log_freq: int = 0,
                  epsilon: float = 0.0,
                  obj_map: Optional[List[int]] = None,
-                 reuse_front_eval: bool = False):
+                 reuse_front_eval: bool = False,
+                 eps_x: Optional[float] = None,
+                 alpha_relative: bool = False,
+                 prescreen: Optional[Dict[int, int]] = None):
 
         self.nvars = nvars
         #self.nobjs = nobjs
@@ -376,6 +431,9 @@ class GlobalStorage:
         self.sup_mode = sup_mode
         self.epsilon = epsilon
         self.reuse_front_eval = reuse_front_eval
+        self.eps_x = eps_x
+        self.alpha_relative = alpha_relative
+        self.prescreen = prescreen or {}
 
         # current_*   : environment the storage ACCEPTS payloads for (switches first)
         # published_* : environment players SEE in the snapshot (switches only once the
@@ -400,6 +458,8 @@ class GlobalStorage:
         self.history: List[Dict] = []
         self.lpatterns: List[np.ndarray] = []
 
+        self.x_bounds = None
+
         # Internal state initialization
         self.reset()
         self.log_current_state(0)
@@ -407,6 +467,9 @@ class GlobalStorage:
     def set_players(self, players: List[Any]) -> None:
         """Registers player actor handles."""
         self.players_handles = players
+
+    def set_x_bounds(self, x_bounds):
+        self.x_bounds = np.asarray(x_bounds, dtype=float)
 
     def set_evaluator(self, evaluators: Union[List[Any], Any]) -> None:
         """Registers evaluator actor handles."""
@@ -478,7 +541,8 @@ class GlobalStorage:
             'evaluations': self.evaluations_count,
             'objective_evals': self.objective_evals,
             'stop_flag': self.stop_flag,
-            'front_size': len(self.front)
+            'front_size': len(self.front),
+            'fe_equivalent': float(np.sum(self.objective_evals)) / self.real_nobjs
         }
 
     def get_results(self) -> Dict[str, Any]:
@@ -487,7 +551,7 @@ class GlobalStorage:
         final_front_eval = self.front_eval
 
         if len(final_front) > self.max_front:
-            mask = front_suppression(final_front, final_front_eval, self.max_front, mode=self.sup_mode)
+            mask = front_suppression(final_front, final_front_eval, self.max_front, mode=self.sup_mode, x_bounds=self.x_bounds)
             final_front = final_front[mask]
             final_front_eval = final_front_eval[mask]
 
@@ -589,6 +653,9 @@ class GlobalStorage:
                 elif self.assign_gens == 'adaptive_shap':
                     self.patterns = adaptive_shap_assigning_gens(self.front, target_front_eval, self.nvars,
                                                                  self.num_trackers)
+                elif self.assign_gens == 'adaptive_eta':
+                    self.patterns = adaptive_eta_assigning_gens(self.front, target_front_eval, self.nvars,
+                                                                self.num_trackers)
                 else:
                     raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
 
@@ -599,6 +666,11 @@ class GlobalStorage:
             # Extract population data
             pop = data['population']
             pop_eval_partial = data['population_eval']
+            k = self.prescreen.get(real_obj)
+            if k is not None and pop.shape[0] > k:
+                sel = self._prescreen(pop, pop_eval_partial, k)
+                pop, pop_eval_partial = pop[sel], pop_eval_partial[sel]
+
             # neval = data['evaluation_counter']
 
             #if neval > 0:
@@ -670,7 +742,8 @@ class GlobalStorage:
 
             # Non-dominated selection
             if len(self.front) > 1:
-                mask = get_not_dominated(self.front_eval, epsilon=self.epsilon)
+                mask = get_not_dominated(self.front_eval, epsilon=self.epsilon, x=self.front, x_bounds=self.x_bounds,
+                                         eps_x=self.eps_x, alpha_relative=self.alpha_relative)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
@@ -684,7 +757,7 @@ class GlobalStorage:
             limit = int(self.max_front * (1.0 + self.max_front_tol)) if self.max_front_tol > 0 else self.max_front
 
             if len(self.front) > limit:
-                mask = front_suppression(self.front, self.front_eval, self.max_front, mode=self.sup_mode)
+                mask = front_suppression(self.front, self.front_eval, self.max_front, mode=self.sup_mode, x_bounds=self.x_bounds)
                 self.front = self.front[mask]
                 self.front_eval = self.front_eval[mask]
 
@@ -701,6 +774,17 @@ class GlobalStorage:
         except Exception as e:
             logger.error(f"GlobalStorage update error: {e}", exc_info=True)
             traceback.print_exc()
+
+    def _prescreen(self, pop, f_own, k):
+        order = list(np.argsort(f_own))
+        take = order[:k // 2]
+        if len(self.front) > 0:
+            lo, hi = (None, None) if self.x_bounds is None else (self.x_bounds[:, 0], self.x_bounds[:, 1])
+            d = cdist(_minmax(pop, lo, hi), _minmax(self.front, lo, hi)).min(axis=1)
+            take += [i for i in np.argsort(-d) if i not in take][:k - len(take)]
+        else:
+            take = order[:k]
+        return np.array(take[:k])
 
     def log_current_state(self, current_iter: int) -> None:
         """Dumps the current algorithm state for convergence tracking."""
@@ -773,7 +857,8 @@ class GlobalStorage:
         if env_version != self.current_env_version:
             return
 
-        mask = get_not_dominated(new_front_eval, epsilon=self.epsilon)
+        mask = get_not_dominated(new_front_eval, epsilon=self.epsilon, x=snapshot_front, x_bounds=self.x_bounds,
+                                 eps_x=self.eps_x, alpha_relative=self.alpha_relative)
         self.front = snapshot_front[mask]
         self.front_eval = new_front_eval[mask]
 
@@ -805,3 +890,33 @@ class RefHolder:
         return self.current_ref
 
 
+def summarize_timing(timing: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    per_criterion[c]: punkty i sekundy zsumowane po aktorach, średni czas na punkt, liczba aktorów
+        liczących c (P_c) i est_seconds = seconds / P_c. Dla najwolniejszego kryterium
+        est_seconds ~ wall_seconds, gdy nie ma przestojów.
+    per_actor: utilization = eval_seconds / czas odniesienia (gracz: czas jego pętli,
+        ewaluator: czas biegu). Niskie wykorzystanie aktora liczącego wolne kryterium = przestoje.
+    """
+    wall = timing.get('wall_seconds')
+    rows = []
+    for rec in timing.get('players', []):
+        if rec is None or rec.get('eval_seconds') is None:
+            continue
+        ref = rec.get('loop_seconds') or wall
+        rows.append(dict(rec, utilization=rec['eval_seconds'] / ref if ref else None))
+    for rec in timing.get('evaluators', []):
+        if rec['points'] == 0:
+            continue
+        rows.append(dict(rec, utilization=rec['eval_seconds'] / wall if wall else None))
+
+    per_criterion = {}
+    for r in rows:
+        c = per_criterion.setdefault(r['criterion'], {'points': 0, 'seconds': 0.0, 'actors': 0})
+        c['points'] += r['points']
+        c['seconds'] += r['eval_seconds']
+        c['actors'] += 1
+    for c in per_criterion.values():
+        c['mean_seconds_per_point'] = c['seconds'] / c['points'] if c['points'] else None
+        c['est_seconds'] = c['seconds'] / c['actors']
+    return {'wall_seconds': wall, 'per_criterion': per_criterion, 'per_actor': rows}

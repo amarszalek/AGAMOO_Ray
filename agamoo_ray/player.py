@@ -9,6 +9,7 @@ from typing import Any, Tuple, Optional, List, Dict
 
 from agamoo_ray.repair import DefaultRepair
 from agamoo_ray.objective import Objective
+from agamoo_ray.utils import front_suppression
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +52,43 @@ class Player(ABC):
         self.repair = DefaultRepair()
         self.init_pop = init_pop
         self.create_method = create_method
-
+        self._pending_update = None
         self.env_version = 0
         self.ref_holder: Optional[Any] = None
         self.iteration: int = 0
         self.evaluation_counter: int = 0
         self.tracker_idx: int = objective.obj
+        # Timing (odczyt przez get_timing po biegu)
+        self._t_start: Optional[float] = None  # początek pętli głównej
+        self._t_end: Optional[float] = None  # koniec pętli głównej
+        self._wait_seconds: float = 0.0  # czas zablokowania w ray.get(storage.update)
+        self._n_full_updates: int = 0  # liczba wysłanych pełnych paczek
+
+
 
     def get_identity(self) -> Tuple[int, int]:
         """Returns (player index, criterion index)."""
         return self.num, self.objective.obj
+
+    def get_timing(self) -> Dict[str, Any]:
+        """Czas biegu gracza. Liczniki ocen są wypełnione tylko, gdy Objective to TimedObjective;
+        czas pętli i czas czekania są mierzone zawsze."""
+        o = self.objective
+        timed = hasattr(o, 'seconds')
+        loop = None
+        if self._t_start is not None:
+            loop = (self._t_end if self._t_end is not None else time.perf_counter()) - self._t_start
+        return {
+            'role': 'player',
+            'id': self.num,
+            'criterion': o.obj,
+            'calls': o.calls if timed else None,
+            'points': o.points if timed else None,
+            'eval_seconds': o.seconds if timed else None,
+            'loop_seconds': loop,
+            'wait_seconds': self._wait_seconds,
+            'full_updates': self._n_full_updates,
+        }
 
     def set_repair(self, repair: Any) -> None:
         """Assigns a custom repair mechanism for out-of-bounds solutions."""
@@ -88,6 +116,7 @@ class Player(ABC):
             logger.info(f"Player {self.num} started (Ray Actor).")
 
         obj_idx = self.objective.obj
+        self._t_start = time.perf_counter()
         next_iter_counter = 0
         iters_pop: Optional[np.ndarray] = None
         delta_iter = 0
@@ -194,8 +223,11 @@ class Player(ABC):
 
                     # 3. Global Storage Update Dispatch
                     # Transmit full payload if other players have progressed, else send a lightweight heartbeat
-                    if np.all(iters_mask[:tracker_idx]) and np.all(iters_mask[tracker_idx + 1:]):
-                        ray.get(self.storage.update.remote({
+                    prev_done = (self._pending_update is None or
+                                 len(ray.wait([self._pending_update], timeout=0)[0]) == 1)
+                    if prev_done and np.all(iters_mask[:tracker_idx]) and np.all(iters_mask[tracker_idx + 1:]):
+                        t_wait = time.perf_counter()
+                        self._pending_update = self.storage.update.remote({
                             'player_id': self.num,
                             'nobj': obj_idx,
                             'population': pop.copy(),
@@ -203,7 +235,10 @@ class Player(ABC):
                             'evaluation_counter': self.evaluation_counter,
                             'iteration_delta': delta_iter,
                             'iter_flag': False
-                        }, env_version=self.env_version))
+                        }, env_version=self.env_version)
+                        self._wait_seconds += time.perf_counter() - t_wait
+                        self._n_full_updates += 1
+
                         if self.verbose:
                             logger.info(f"Player {self.num} dispatched population update at iter {self.iteration}")
 
@@ -270,10 +305,9 @@ class Player(ABC):
                                 known_mask[i] = reuse
 
                         elif ('front_sup' in self.exchange) and (len(front) > 0):
-                            proc = 100
                             se = self.exchange.split('_')
-                            if (len(se) == 3) and (0 < int(se[2]) < 100):
-                                proc = int(se[2])
+                            proc = next((int(s) for s in se if s.isdigit() and 0 < int(s) < 100), 100)
+                            use_dual = 'dual' in se
 
                             arr = np.arange(front.shape[0])
                             np.random.shuffle(arr)
@@ -283,10 +317,14 @@ class Player(ABC):
                             # Apply distance suppression to maintain diversity during exchange
                             target_size = int(pop.shape[0] * (proc / 100))
                             if target_size < local_front.shape[0]:
-                                #mask = front_suppression(local_front, local_front_eval, target_size, mode='objectives')
-                                mask = self._front_suppression_cd(local_front_eval, target_size)
-                                local_front = local_front[mask]
-                                local_front_eval = local_front_eval[mask]
+                                if use_dual:
+                                    keep = front_suppression(local_front, local_front_eval, target_size,
+                                                             mode='dual_omni', x_bounds=self.get_bounds())
+                                    idx = np.where(keep)[0]
+                                else:
+                                    idx = self._front_suppression_cd(local_front_eval, target_size)
+                                local_front = local_front[idx]
+                                local_front_eval = local_front_eval[idx]
 
                             if len(local_front) > 0:
                                 nn = min(target_size, local_front.shape[0])
@@ -440,6 +478,7 @@ class Player(ABC):
             logger.error(f"Player {self.num} crashed: {e}", exc_info=True)
             traceback.print_exc()
         finally:
+            self._t_end = time.perf_counter()
             if self.verbose:
                 logger.info(f"Player {self.num} successfully exited.")
 
@@ -479,6 +518,10 @@ class Player(ABC):
         for solutions generated by other players.
         """
         return self.objective.evaluate(pop)
+
+    def get_bounds(self):
+        b = self.objective.bounds
+        return None if b is None else np.asarray(b, dtype=float)
 
     def update_environment(self, **kwargs) -> None:
         """Asynchronously updates the player's environment."""
@@ -596,6 +639,15 @@ class Evaluator:
         """
         res = self.objectives[i].evaluate(pop)
         return np.array(res).flatten()
+
+    def get_timing(self) -> List[Dict[str, Any]]:
+        """Jeden rekord na każde TimedObjective ewaluatora (kryteria nieliczone mają points == 0)."""
+        out = []
+        for i, o in enumerate(self.objectives):
+            if hasattr(o, 'seconds'):
+                out.append({'role': 'evaluator', 'criterion': i, 'calls': o.calls,
+                            'points': o.points, 'eval_seconds': o.seconds})
+        return out
 
     def update_environment(self, **kwargs) -> None:
         """Asynchronously updates the evaluator's environment."""

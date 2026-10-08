@@ -38,7 +38,8 @@ def pairwise_dominance(x: np.ndarray) -> np.ndarray:
     return ~is_dominated
 
 
-def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.ndarray:
+def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0, x=None, x_bounds=None, eps_x=None,
+                      alpha_relative=False) -> np.ndarray:
     """
     Filters a population to extract the non-dominated Pareto front.
     Utilizes a C-extension if available for performance, otherwise falls back to NumPy.
@@ -55,22 +56,22 @@ def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.
     """
 
     if epsilon > 0.0:
-        # --- Grid Epsilon-Dominance ---
         boxes = np.floor(populations_eval / epsilon)
         worse_or_equal = np.all(boxes[:, np.newaxis] >= boxes, axis=2)
         strictly_worse = np.any(boxes[:, np.newaxis] > boxes, axis=2)
-        is_dominated_box = np.any(worse_or_equal & strictly_worse, axis=1)
+        valid_indices = np.where(~np.any(worse_or_equal & strictly_worse, axis=1))[0]
 
-        box_mask = ~is_dominated_box
-        valid_indices = np.where(box_mask)[0]
+        xcell = None
+        if x is not None and eps_x is not None:
+            lo, hi = (None, None) if x_bounds is None else (x_bounds[:, 0], x_bounds[:, 1])
+            xcell = np.floor(_minmax(x, lo, hi) / eps_x).astype(np.int64)
 
-        # Filter duplicates within the same box (keep the point closest to the box's ideal point)
         unique_boxes = {}
         for idx in valid_indices:
-            box_tuple = tuple(boxes[idx])
+            key = tuple(boxes[idx]) if xcell is None else (tuple(boxes[idx]), tuple(xcell[idx]))
             dist = np.sum(populations_eval[idx])
-            if box_tuple not in unique_boxes or dist < unique_boxes[box_tuple][1]:
-                unique_boxes[box_tuple] = (idx, dist)
+            if key not in unique_boxes or dist < unique_boxes[key][1]:
+                unique_boxes[key] = (idx, dist)
 
         final_mask = np.zeros(populations_eval.shape[0], dtype=bool)
         for idx, _ in unique_boxes.values():
@@ -78,15 +79,12 @@ def get_not_dominated(populations_eval: np.ndarray, epsilon: float = 0.0) -> np.
         return final_mask
 
     elif epsilon < 0.0:
-        # --- Alpha Dominancja (Relaxed Dominance) ---
         tol = abs(epsilon)
-        # Solution j (row) dominates i (column/newaxis) only if j <= i - tol
-        # This condition implies that 'i' is significantly worse in all criteria simultaneously.
+        if alpha_relative:
+            span = populations_eval.max(axis=0) - populations_eval.min(axis=0)
+            tol = tol * np.where(span > 1e-12, span, 1.0)
         is_significantly_worse = np.all(populations_eval[:, np.newaxis] >= populations_eval + tol, axis=2)
-
-        # 'i' is discarded only if at least one 'j' is found that is significantly better
-        is_dominated = np.any(is_significantly_worse, axis=1)
-        return ~is_dominated
+        return ~np.any(is_significantly_worse, axis=1)
 
     else:
         # --- Classic Pareto Dominance ---
@@ -106,7 +104,7 @@ def pairwise_distance(x: np.ndarray) -> np.ndarray:
     return np.linalg.norm(x[:, None, :] - x[None, :, :], axis=-1)
 
 
-def front_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int, mode: str = 'objectives') -> np.ndarray:
+def front_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int, mode: str = 'objectives', x_bounds=None) -> np.ndarray:
     """
     Reduces the size of the Pareto front to a specified maximum while maintaining
     diversity using a 'crowding' distance heuristic.
@@ -132,7 +130,7 @@ def front_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int,
             mask = _suppression(front, front_max)
         return mask
     elif mode == 'dual_omni':
-        return _dual_omni_suppression(front, front_eval, front_max)
+        return _dual_omni_suppression(front, front_eval, front_max, x_bounds=x_bounds)
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
@@ -198,7 +196,14 @@ def _suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
     return mask
 
 
-def _dual_omni_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int) -> np.ndarray:
+def _minmax(a, lo=None, hi=None):
+    """Min-max do [0, 1]; lo/hi = granice problemu albo None (zakres bieżącego zbioru)."""
+    lo = a.min(axis=0) if lo is None else np.asarray(lo, dtype=float)
+    hi = a.max(axis=0) if hi is None else np.asarray(hi, dtype=float)
+    span = np.where(hi - lo > 1e-12, hi - lo, 1.0)
+    return (a - lo) / span
+
+def _dual_omni_suppression(front: np.ndarray, front_eval: np.ndarray, front_max: int, x_bounds=None) -> np.ndarray:
     """
     Reduces the size of the Pareto front to a specified maximum while maintaining
     diversity in BOTH objective (F) and decision variable (X) spaces.
@@ -212,57 +217,32 @@ def _dual_omni_suppression(front: np.ndarray, front_eval: np.ndarray, front_max:
     Returns:
         np.ndarray: Boolean mask of individuals kept in the suppressed front.
     """
-    n = front_eval.shape[0] - front_max
-    if n <= 0:
-        return np.ones(front_eval.shape[0], dtype=bool)
+    n_pts = front_eval.shape[0]
+    if n_pts <= front_max:
+        return np.ones(n_pts, dtype=bool)
 
-    # Safeguard extremes (ideal points) in both spaces
-    ideal_f = np.argmin(front_eval, axis=0)
-    ideal_x = np.argmin(front, axis=0)
-    ideal = np.unique(np.concatenate((ideal_f, ideal_x)))
+    lo, hi = (None, None) if x_bounds is None else (x_bounds[:, 0], x_bounds[:, 1])
+    Xn = _minmax(front, lo, hi) / np.sqrt(front.shape[1])
+    Fn = _minmax(front_eval) / np.sqrt(front_eval.shape[1])
+    D = np.maximum(pairwise_distance(Fn), pairwise_distance(Xn))
+    np.fill_diagonal(D, np.inf)
 
-    # Normalize Objective Space (F)
-    front_eval_norm = front_eval + np.abs(np.min(front_eval, axis=0)) + 1.0
-    front_eval_norm = front_eval_norm / np.max(front_eval_norm, axis=0)
+    keep = np.ones(n_pts, dtype=bool)
+    protected = np.zeros(n_pts, dtype=bool)
+    protected[np.argmin(front_eval, axis=0)] = True
 
-    # Normalize Decision Variable Space (X)
-    front_norm = front + np.abs(np.min(front, axis=0)) + 1.0
-    front_norm = front_norm / np.max(front_norm, axis=0)
-
-    # Calculate pairwise distance matrices (computed ONLY ONCE)
-    z_f = pairwise_distance(front_eval_norm)
-    z_x = pairwise_distance(front_norm)
-
-    # DUAL FUSION (Core of Omni-Optimizer)
-    # Dual distance is the MAXIMUM of F and X distances.
-    # If points are close in F but far in X, Z_dual will be large -> they survive.
-    z_dual = np.maximum(z_f, z_x)
-    mask = np.ones(front_eval.shape[0], dtype=bool)
-
-    # Ignore upper triangle and diagonal of the distance matrix
-    t = np.tril(z_dual) + np.triu(np.ones_like(z_dual) * 1000000)
-    arg = np.argsort(t, axis=None)
-    indx_i, indx_j = np.unravel_index(arg, t.shape)
-
-    # Lightning-fast iterative removal without re-multiplying matrices
-    while n > 0:
-        ii = indx_i[0]
-        mask[ii] = False
-
-        # Remove the deleted point from the sorted distances list
-        tmp = indx_i[indx_i != ii]
-        indx_j = indx_j[indx_i != ii]
-        indx_i = tmp.copy()
-        tmp = indx_j[indx_j != ii]
-        indx_i = indx_i[indx_j != ii]
-        indx_j = tmp.copy()
-        n -= 1
-
-    # Restore boundary points
-    for i in ideal:
-        mask[i] = True
-
-    return mask
+    for _ in range(n_pts - front_max):
+        cand = np.where(keep & ~protected)[0]
+        if cand.size == 0:
+            break
+        Ds = np.sort(D[np.ix_(cand, np.where(keep)[0])], axis=1)
+        k = min(2, Ds.shape[1])
+        order = np.lexsort(tuple(Ds[:, i] for i in reversed(range(k))))
+        victim = cand[order[0]]
+        keep[victim] = False
+        D[victim, :] = np.inf
+        D[:, victim] = np.inf
+    return keep
 
 
 def assigning_gens(nvars: int, nobjs: int) -> np.ndarray:
@@ -293,6 +273,32 @@ def assigning_gens(nvars: int, nobjs: int) -> np.ndarray:
             if nvars >= nobjs and not np.any(np.all(r2, axis=1)) and not np.any(np.all(np.logical_not(r2), axis=1)):
                 break
     return r2
+
+
+def correlation_ratio(front, front_eval, n_bins=10):
+    n, nvars = front.shape
+    nobjs = front_eval.shape[1]
+    b = max(2, min(n_bins, n // 5))
+    fz = front_eval - front_eval.mean(axis=0)
+    tot = np.sum(fz ** 2, axis=0)
+    eta = np.zeros((nvars, nobjs))
+    for i in range(nvars):
+        edges = np.quantile(front[:, i], np.linspace(0, 1, b + 1)[1:-1])
+        bins = np.searchsorted(edges, front[:, i])
+        cnt = np.bincount(bins, minlength=b).astype(float)
+        nz = cnt > 0
+        for j in range(nobjs):
+            s = np.bincount(bins, weights=fz[:, j], minlength=b)
+            eta[i, j] = np.sum(s[nz] ** 2 / cnt[nz]) / tot[j] if tot[j] > 1e-12 else 0.0
+    return eta
+
+
+def adaptive_eta_assigning_gens(front, front_eval, nvars, nobjs):
+    patterns = assigning_gens(nvars, nobjs)
+    if len(front) < 20:
+        return patterns
+    eta = correlation_ratio(front, front_eval)
+    return np.logical_or(patterns, eta.T >= eta.mean() + eta.std())
 
 
 def adaptive_linear_assigning_gens(front: np.ndarray, front_eval: np.ndarray, nvars: int, nobjs: int) -> np.ndarray:

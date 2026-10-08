@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Any, Optional
 import numpy as np
+import time
 
 
 class Objective(ABC):
@@ -69,3 +70,40 @@ class Objective(ABC):
             else:
                 # Force update for custom dynamic properties
                 self.__dict__[key] = value
+
+class TimedObjective(Objective):
+    """
+    Owija dowolne Objective i liczy, ile punktów oceniło i ile to trwało.
+    Opcjonalnie dodaje opóźnienie na punkt (emulacja drogiego kryterium):
+    busy=False -> time.sleep (nie obciąża CPU), busy=True -> aktywne czekanie (obciąża rdzeń
+    jak prawdziwa symulacja).
+    """
+    def __init__(self, inner: Objective, delay_per_point: float = 0.0, busy: bool = False):
+        super().__init__(inner.num, inner.n_var, inner.n_obj, inner.bounds, inner.obj, inner.args, inner.verbose)
+        self.inner = inner
+        self.delay = delay_per_point
+        self.busy = busy
+        self.calls = 0
+        self.points = 0
+        self.seconds = 0.0
+
+    def evaluate(self, x: np.ndarray) -> np.ndarray:
+        t0 = time.perf_counter()
+        out = self.inner.evaluate(x)
+        if self.delay > 0:
+            wait = self.delay * len(x)
+            if self.busy:
+                t_end = time.perf_counter() + wait
+                while time.perf_counter() < t_end:
+                    pass
+            else:
+                time.sleep(wait)
+        self.calls += 1
+        self.points += len(x)
+        self.seconds += time.perf_counter() - t0
+        return out
+
+    def update_env(self, **kwargs) -> None:
+        self.inner.update_env(**kwargs)
+
+
