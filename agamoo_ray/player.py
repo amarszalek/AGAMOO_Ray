@@ -65,6 +65,10 @@ class Player(ABC):
         self._wait_seconds: float = 0.0  # czas zablokowania w ray.get(storage.update)
         self._n_full_updates: int = 0  # liczba wysłanych pełnych paczek
 
+        self._n_heartbeats: int = 0
+        self._t_dispatch: Optional[float] = None
+        self._update_latency: float = 0.0   # suma czasu od wysłania paczki do wykrycia jej obsłużenia
+
 
 
     def get_identity(self) -> Tuple[int, int]:
@@ -89,6 +93,8 @@ class Player(ABC):
             'loop_seconds': loop,
             'wait_seconds': self._wait_seconds,
             'full_updates': self._n_full_updates,
+            'heartbeats': self._n_heartbeats,
+            'update_latency_seconds': self._update_latency,
         }
 
     def set_repair(self, repair: Any) -> None:
@@ -229,6 +235,11 @@ class Player(ABC):
                     # Transmit full payload if other players have progressed, else send a lightweight heartbeat
                     prev_done = (self._pending_update is None or
                                  len(ray.wait([self._pending_update], timeout=0)[0]) == 1)
+
+                    if prev_done and self._t_dispatch is not None:
+                        self._update_latency += time.perf_counter() - self._t_dispatch
+                        self._t_dispatch = None
+
                     if prev_done and np.all(iters_mask[:tracker_idx]) and np.all(iters_mask[tracker_idx + 1:]):
                         t_wait = time.perf_counter()
                         self._pending_update = self.storage.update.remote({
@@ -243,6 +254,7 @@ class Player(ABC):
                         if self.blocking_update:
                             ray.get(self._pending_update)
                         self._wait_seconds += time.perf_counter() - t_wait
+                        self._t_dispatch = t_wait
                         self._n_full_updates += 1
 
                         if self.verbose:
@@ -261,6 +273,7 @@ class Player(ABC):
                             'iteration_delta': delta_iter
                         }, env_version=self.env_version)
                         delta_iter = 0
+                        self._n_heartbeats += 1
                         # Yield execution briefly to avoid hammering the object store
                         time.sleep(0.001)
 

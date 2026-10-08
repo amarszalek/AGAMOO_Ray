@@ -448,6 +448,7 @@ class GlobalStorage:
         self.players_handles: List[Any] = []
         self.evaluators: List[Any] = []
         self.eval_rr_index: int = 0  # Round-Robin index for load balancing
+        self.eval_load: List[int] = []  # calls in flight per evaluator
         self.verbose = verbose
         self.assign_gens = assign_gens
 
@@ -476,6 +477,23 @@ class GlobalStorage:
     def set_evaluator(self, evaluators: Union[List[Any], Any]) -> None:
         """Registers evaluator actor handles."""
         self.evaluators = evaluators if isinstance(evaluators, list) else [evaluators]
+        self.eval_load = [0] * len(self.evaluators)
+
+    def _pick_evaluator(self) -> int:
+        """Evaluator with the fewest calls in flight; ties broken round-robin.
+        The load is booked here (synchronously), so two picks within one update see each other."""
+        n = len(self.evaluators)
+        start = self.eval_rr_index % n
+        k = min(range(n), key=lambda j: (self.eval_load[j], (j - start) % n))
+        self.eval_rr_index = k + 1
+        self.eval_load[k] += 1
+        return k
+
+    async def _evaluate_on(self, k: int, pop: np.ndarray, obj_idx: int):
+        try:
+            return await self.evaluators[k].evaluate.remote(pop, obj_idx)
+        finally:
+            self.eval_load[k] -= 1
 
     def _refresh_snapshot_ref(self) -> None:
         """
@@ -698,9 +716,8 @@ class GlobalStorage:
             num_workers = len(self.evaluators)
             for i in range(self.real_nobjs):
                 if i != real_obj and num_workers > 0:
-                    evaluator = self.evaluators[self.eval_rr_index % num_workers]
-                    self.eval_rr_index += 1
-                    futures.append(evaluator.evaluate.remote(pop, i))
+                    k = self._pick_evaluator()
+                    futures.append(self._evaluate_on(k, pop, i))
                     target_objs.append(i)
 
             if futures:
@@ -843,9 +860,8 @@ class GlobalStorage:
         num_workers = len(self.evaluators)
         for i in range(self.real_nobjs):
             if num_workers > 0:
-                evaluator = self.evaluators[self.eval_rr_index % num_workers]
-                self.eval_rr_index += 1
-                futures.append(evaluator.evaluate.remote(snapshot_front, i))
+                k = self._pick_evaluator()
+                futures.append(self._evaluate_on(k, snapshot_front, i))
                 target_objs.append(i)
 
         if futures:
