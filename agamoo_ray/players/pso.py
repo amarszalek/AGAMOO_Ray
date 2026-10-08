@@ -89,8 +89,14 @@ class PSO(Player):
             self.pbest_pos = deepcopy(pop)
             self.pbest_eval = deepcopy(pop_eval)
         else:
-            # Zabezpieczenie przed wpływem Koewolucji (Cooperative Coevolution).
-            # Jeśli inny algorytm zmodyfikował naszą populację i jest ona lepsza niż nasz dotychczasowy pbest, aktualizujemy go.
+            # Wiersze podmienione z zewnątrz (wymiana): nowa pamięć w nowym punkcie, bez starej prędkości
+            last = getattr(self, '_last_pop', None)
+            if last is not None and last.shape == pop.shape:
+                swapped = np.any(pop != last, axis=1)
+                if swapped.any():
+                    self.pbest_pos[swapped] = pop[swapped]
+                    self.pbest_eval[swapped] = pop_eval[swapped]
+                    self.velocities[swapped] = 0.0
             better_mask_ext = pop_eval < self.pbest_eval
             self.pbest_pos[better_mask_ext] = pop[better_mask_ext]
             self.pbest_eval[better_mask_ext] = pop_eval[better_mask_ext]
@@ -153,6 +159,7 @@ class PSO(Player):
         # Nadpisanie wektora prędkości. Aktualizujemy tylko tam, gdzie działa pattern,
         # aby uśpione geny nie kumulowały w tle "ukrytej" energii kinetycznej.
         self.velocities = np.where(pattern, new_velocities, self.velocities)
+        self._last_pop = new_pop.copy()
 
         return new_pop, new_pop_eval, evaluation_counter
 
