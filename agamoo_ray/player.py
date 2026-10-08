@@ -59,6 +59,7 @@ class Player(ABC):
         self.evaluation_counter: int = 0
         self.tracker_idx: int = objective.obj
         self.blocking_update = False
+        self._pending_hb = None
 
         self._step_errors: int = 0  # consecutive failed step() calls
         self.max_step_errors: int = 10  # after that many in a row the player loop ends
@@ -276,8 +277,10 @@ class Player(ABC):
                         iters_pop = iters.copy()
                     else:
                         # Heartbeat update (only iteration info)
-                        if prev_done:
-                            self.storage.update.remote({
+                        hb_done = (self._pending_hb is None or
+                                   len(ray.wait([self._pending_hb], timeout=0)[0]) == 1)
+                        if hb_done:
+                            self._pending_hb = self.storage.update.remote({
                                 'player_id': self.num,
                                 'nobj': obj_idx,
                                 'iter_flag': True,
@@ -285,7 +288,6 @@ class Player(ABC):
                             }, env_version=self.env_version)
                             delta_iter = 0
                             self._n_heartbeats += 1
-                        # Yield execution briefly to avoid hammering the object store
                         time.sleep(0.001)
 
 

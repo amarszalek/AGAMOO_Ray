@@ -328,7 +328,9 @@ class AGAMOO:
             for rec in (fetch(r) or []):
                 rec['id'] = k
                 evaluators.append(rec)
-        return {'wall_seconds': wall, 'players': players, 'evaluators': evaluators}
+        loops = [p['loop_seconds'] for p in players if p and p.get('loop_seconds')]
+        return {'wall_seconds': max(loops) if loops else wall, 'wall_stop_seconds': wall,
+                'players': players, 'evaluators': evaluators}
 
     def get_results(self, key: Optional[str] = None) -> Any:
         """Retrieves the final optimization results from the global storage."""
