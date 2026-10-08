@@ -63,7 +63,8 @@ class AGAMOO:
                  reuse_front_eval: bool = False,
                  eps_x: Optional[float] = None,
                  alpha_relative: bool = False,
-                 prescreen: Optional[Dict[int, int]] = None
+                 prescreen: Optional[Dict[int, int]] = None,
+                 blocking_update: bool = False
                  ):
         """Initializes the AGAMOO framework orchestrator."""
         self.max_eval = max_eval
@@ -84,7 +85,7 @@ class AGAMOO:
         self.eps_x = eps_x
         self.alpha_relative = alpha_relative
         self.prescreen = prescreen or {}
-        self.timing = None
+        self.blocking_update = blocking_update
 
         self.env_version = 0
 
@@ -221,6 +222,7 @@ class AGAMOO:
         # Start asynchronous player loops
         for p in self.players:
             p.set_repair.remote(self.repair)
+            p.set_blocking_update.remote(self.blocking_update)
             p.start.remote()
 
         if self.verbose:
@@ -561,7 +563,8 @@ class GlobalStorage:
             'iter_counters': self.iter_counters,
             'evaluations': self.evaluations_count,
             'objective_evals': self.objective_evals,
-            'nfe_total': float(np.sum(self.objective_evals))
+            'nfe_total': float(np.sum(self.objective_evals)),
+            'fe_equivalent': float(np.sum(self.objective_evals)) / self.real_nobjs
         }
 
     def get_history(self) -> List[Dict[str, Any]]:

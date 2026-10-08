@@ -58,6 +58,7 @@ class Player(ABC):
         self.iteration: int = 0
         self.evaluation_counter: int = 0
         self.tracker_idx: int = objective.obj
+        self.blocking_update = False
         # Timing (odczyt przez get_timing po biegu)
         self._t_start: Optional[float] = None  # początek pętli głównej
         self._t_end: Optional[float] = None  # koniec pętli głównej
@@ -94,6 +95,9 @@ class Player(ABC):
         """Assigns a custom repair mechanism for out-of-bounds solutions."""
         if repair is not None:
             self.repair = repair
+
+    def set_blocking_update(self, flag: bool) -> None:
+        self.blocking_update = flag
 
     def set_infrastructure(self, storage: Any, ref_holder: Any) -> None:
         """
@@ -236,6 +240,8 @@ class Player(ABC):
                             'iteration_delta': delta_iter,
                             'iter_flag': False
                         }, env_version=self.env_version)
+                        if self.blocking_update:
+                            ray.get(self._pending_update)
                         self._wait_seconds += time.perf_counter() - t_wait
                         self._n_full_updates += 1
 
