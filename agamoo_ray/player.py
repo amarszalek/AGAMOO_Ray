@@ -266,15 +266,15 @@ class Player(ABC):
                         iters_pop = iters.copy()
                     else:
                         # Heartbeat update (only iteration info)
-                        #if prev_done:
-                        self.storage.update.remote({
-                            'player_id': self.num,
-                            'nobj': obj_idx,
-                            'iter_flag': True,
-                            'iteration_delta': delta_iter
-                        }, env_version=self.env_version)
-                        delta_iter = 0
-                        self._n_heartbeats += 1
+                        if prev_done:
+                            self.storage.update.remote({
+                                'player_id': self.num,
+                                'nobj': obj_idx,
+                                'iter_flag': True,
+                                'iteration_delta': delta_iter
+                            }, env_version=self.env_version)
+                            delta_iter = 0
+                            self._n_heartbeats += 1
                         # Yield execution briefly to avoid hammering the object store
                         time.sleep(0.001)
 
