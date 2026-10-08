@@ -310,6 +310,7 @@ class AGAMOO:
     def _collect_timing(self, timeout: float) -> Dict[str, Any]:
         wall = None if self._t_start is None else time.perf_counter() - self._t_start
         refs = [p.get_timing.remote() for p in self.players]
+        ray.wait(refs, num_returns=len(refs), timeout=timeout)
         erefs = [e.get_timing.remote() for e in self.evaluators]
         ready, _ = ray.wait(refs + erefs, num_returns=len(refs) + len(erefs), timeout=timeout)
         ready = set(ready)

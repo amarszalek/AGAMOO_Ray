@@ -511,6 +511,11 @@ class Player(ABC):
             traceback.print_exc()
         finally:
             self._t_end = time.perf_counter()
+            if self._pending_update is not None:
+                try:
+                    ray.get(self._pending_update, timeout=60)
+                except Exception:
+                    pass
             if self.verbose:
                 logger.info(f"Player {self.num} successfully exited.")
 
