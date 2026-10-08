@@ -174,8 +174,14 @@ def _suppression(front_eval: np.ndarray, front_max: int) -> np.ndarray:
     indx_i, indx_j = np.unravel_index(arg, t.shape)
 
     # Iteratively remove the most crowded individuals
-    while n > 0:
+    protected = set(int(i) for i in ideal)
+    while n > 0 and len(indx_i) > 0:
         ii = indx_i[0]
+        if ii in protected:
+            ii = indx_j[0]
+        if ii in protected:  # both ends of the closest pair are protected
+            indx_i, indx_j = indx_i[1:], indx_j[1:]
+            continue
         mask[ii] = False
 
         # Remove dependencies of the deleted point from the distance matrix indices
