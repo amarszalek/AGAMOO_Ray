@@ -59,6 +59,10 @@ class Player(ABC):
         self.evaluation_counter: int = 0
         self.tracker_idx: int = objective.obj
         self.blocking_update = False
+
+        self._step_errors: int = 0  # consecutive failed step() calls
+        self.max_step_errors: int = 10  # after that many in a row the player loop ends
+
         # Timing (odczyt przez get_timing po biegu)
         self._t_start: Optional[float] = None  # początek pętli głównej
         self._t_end: Optional[float] = None  # koniec pętli głównej
@@ -168,6 +172,7 @@ class Player(ABC):
                 # 1. Fetch Global State Snapshot (Non-blocking via RefHolder)
                 snapshot_ref = ray.get(self.ref_holder.get_ref.remote())
                 if snapshot_ref is None:
+                    self.storage.refresh_snapshot.remote()
                     time.sleep(0.01)
                     continue
 
@@ -217,6 +222,11 @@ class Player(ABC):
                         except Exception as e:
                             logger.error(f"Player {self.num} error in step(): {e}", exc_info=True)
                             traceback.print_exc()
+                            self._step_errors += 1
+                            if self._step_errors >= self.max_step_errors:
+                                raise  # loop ends -> AGAMOO detects it (players_running)
+                        else:
+                            self._step_errors = 0
 
                     self.iteration += 1
                     delta_iter += 1

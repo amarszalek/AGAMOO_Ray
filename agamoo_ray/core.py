@@ -220,10 +220,11 @@ class AGAMOO:
             logger.info(f"Starting AGAMOO optimization ({'BACKGROUND' if background else 'BLOCKING'})...")
 
         # Start asynchronous player loops
+        self._start_refs = []
         for p in self.players:
             p.set_repair.remote(self.repair)
             p.set_blocking_update.remote(self.blocking_update)
-            p.start.remote()
+            self._start_refs.append(p.start.remote())
 
         if self.verbose:
             logger.info("Players are running in the background...")
@@ -251,6 +252,11 @@ class AGAMOO:
 
                     if stop_flag:
                         break
+                    # a player loop ended without the stop flag -> the run can never finish
+                    if self._players_running() < len(self.players) and \
+                            not ray.get(self.storage.get_status.remote())['stop_flag']:
+                        raise RuntimeError('A player loop ended before the stop flag '
+                                            '(exception in a player or a dead actor) - see the Ray logs.')
 
                     time.sleep(0.5)
         except KeyboardInterrupt:
@@ -288,7 +294,18 @@ class AGAMOO:
         """
         if not self.storage:
             return None
-        return ray.get(self.storage.get_status.remote())
+        status = ray.get(self.storage.get_status.remote())
+        status['players_running'] = self._players_running()
+        return status
+
+    def _players_running(self) -> int:
+        """Number of player loops still running (a loop ends on the stop flag, on an exception
+        inside the player, or when its actor dies)."""
+        refs = getattr(self, '_start_refs', None) or []
+        if not refs:
+            return len(self.players)
+        done, _ = ray.wait(refs, num_returns=len(refs), timeout=0)
+        return len(refs) - len(done)
 
     def _collect_timing(self, timeout: float) -> Dict[str, Any]:
         wall = None if self._t_start is None else time.perf_counter() - self._t_start
@@ -551,6 +568,10 @@ class GlobalStorage:
     def force_stop(self) -> None:
         """Sets the internal stop flag to True."""
         self.stop_flag = True
+        self._refresh_snapshot_ref()
+
+    def refresh_snapshot(self) -> None:
+        """Publishes the current snapshot again (e.g. after RefHolder was restarted and lost it)."""
         self._refresh_snapshot_ref()
 
     def get_status(self) -> Dict[str, Any]:
@@ -890,7 +911,7 @@ class GlobalStorage:
             logger.info(f"Re-evaluation completed. New archive size: {len(self.front)}")
 
 
-@ray.remote
+@ray.remote(max_restarts=-1, max_task_retries=-1)
 class RefHolder:
     """
     Lightweight Ray actor serving as a pointer to the latest global state snapshot.
