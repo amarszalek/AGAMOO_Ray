@@ -53,6 +53,7 @@ class SimulatedAnnealing(Player):
         self.create: str = player_param.get('create', 'lhs')
         self.seed = player_param.get('seed', None)
         self.dim = objective.n_var
+        self.relative_T: bool = player_param.get('relative_T', False)
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
@@ -123,7 +124,12 @@ class SimulatedAnnealing(Player):
         worse_mask = delta_f >= 0
 
         # Safeguard against underflow (highly negative exponent values yield 0.0 in probability)
-        exponent = np.clip(-delta_f[worse_mask] / self.T, -700, 0)
+
+        scale = 1.0
+        if self.relative_T:
+            s = np.std(temp_pop_eval)
+            scale = s if s > 1e-12 else 1.0
+        exponent = np.clip(-delta_f[worse_mask] / self.T*scale, -700, 0)
         prob[worse_mask] = np.exp(exponent)
 
         random_vals = np.random.rand(n_pop)

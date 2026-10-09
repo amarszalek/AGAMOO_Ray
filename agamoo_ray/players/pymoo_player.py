@@ -80,6 +80,7 @@ class PymooPlayer(Player):
         # We must push this updated knowledge into Pymoo before asking for new offspring.
         pymoo_pop = Population.new("X", pop[:, indx])
         pymoo_pop.set("F", pop_eval.reshape(-1, 1))
+        pymoo_pop.set("full", pop.copy())
         self.alg.pop = pymoo_pop
 
         # 3. Pymoo 'Ask': Generate new candidates (offspring) for active genes
@@ -103,18 +104,19 @@ class PymooPlayer(Player):
         # 6. Pymoo 'Tell': Return evaluated offspring to Pymoo
         # This triggers Pymoo's internal Survival mechanism (Selection for the next generation)
         infills.set("F", offspring_eval.reshape(-1, 1))
+        infills.set("full", full_offspring)
         self.alg.tell(infills=infills)
-
+        new_pop = np.asarray(self.alg.pop.get("full"), dtype=float)
         # 7. Extract the survived population from Pymoo's internal state
-        survivors_x = self.alg.pop.get("X")
+        #survivors_x = self.alg.pop.get("X")
         survivors_evals = self.alg.pop.get("F").flatten()
 
         # 8. Reconstruct the final population payload for the AGAMOO Global Storage
-        n_survivors = len(survivors_x)
-        new_pop = np.zeros((n_survivors, pop.shape[1]))
+        #n_survivors = len(survivors_x)
+        #new_pop = np.zeros((n_survivors, pop.shape[1]))
 
-        parent_indices2 = np.arange(n_survivors) % pop.shape[0]
-        new_pop[:, :] = pop[parent_indices2, :]
-        new_pop[:, indx] = survivors_x
+        #parent_indices2 = np.arange(n_survivors) % pop.shape[0]
+       # new_pop[:, :] = pop[parent_indices2, :]
+       # new_pop[:, indx] = survivors_x
 
         return new_pop, survivors_evals, evals_count

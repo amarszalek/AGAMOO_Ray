@@ -46,8 +46,8 @@ class ClonalSelection(Player):
             init_pop (np.ndarray, optional): Custom initial population array.
         """
         # Extract CSA-specific hyperparameters
-        self.nclone: int = player_param.get('nclone', 15)
-        self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.45, 0.9, 0.01]))
+        self.nclone: int = player_param.get('nclone', 12)
+        self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.15, 0.85, 0.005]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
         self.create: str = player_param.get('create', 'lhs')
