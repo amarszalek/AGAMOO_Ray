@@ -49,10 +49,13 @@ class PSO(Player):
         self.dim = objective.n_var
         self.guide: str = player_param.get('guide', 'global')  # 'global' | 'local'
         self.k_guide: int = player_param.get('k_guide', 5)
-        # After an exchange, the personal best of every replaced particle is set to its new
-        # (archive) position; velocities are kept, so a particle that is its own local guide
-        # does not freeze (which is what made the earlier reset with zeroed velocity fail).
-        self.reset_pbest: bool = bool(player_param.get('reset_pbest', False))
+        # What happens to particles replaced by an exchange:
+        #   'none'   - nothing (pbest and velocity kept),
+        #   'keep_v' - pbest := new (archive) position, velocity kept; safe with guide='local',
+        #              where a particle may be its own guide and would freeze with zero velocity,
+        #   'zero_v' - pbest := new position and velocity := 0 (full restart of the particle).
+        # bool values are accepted for backward compatibility: True -> 'keep_v', False -> 'none'.
+        self.reset_pbest: str = self._parse_reset_pbest(player_param.get('reset_pbest', 'none'))
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
@@ -167,9 +170,20 @@ class PSO(Player):
             self.pbest_pos = pop.copy()
             self.pbest_eval = pop_eval.copy()
 
+    @staticmethod
+    def _parse_reset_pbest(value: Any) -> str:
+        if isinstance(value, (bool, np.bool_)):
+            return 'keep_v' if value else 'none'
+        value = str(value)
+        if value not in ('none', 'keep_v', 'zero_v'):
+            raise ValueError(f"PSO: reset_pbest must be 'none', 'keep_v' or 'zero_v', got {value!r}")
+        return value
+
     def on_exchange(self, pop: np.ndarray, pop_eval: np.ndarray, modified_mask: np.ndarray) -> None:
-        if not self.reset_pbest or self.pbest_pos is None:
+        if self.reset_pbest == 'none' or self.pbest_pos is None:
             return  # disabled, or swarm not initialised yet (first step builds pbest from pop)
         self.pbest_pos[modified_mask] = pop[modified_mask]
         self.pbest_eval[modified_mask] = pop_eval[modified_mask]
+        if self.reset_pbest == 'zero_v':
+            self.velocities[modified_mask] = 0.0
 
