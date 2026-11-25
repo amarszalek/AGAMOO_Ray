@@ -47,7 +47,7 @@ class Player(ABC):
         self.objective = objective
         self.storage = storage_actor
         self.gens = gens
-        self.exchange = exchange
+        #self.exchange = exchange
         self.verbose = verbose
         self.repair = DefaultRepair()
         self.init_pop = init_pop
@@ -60,6 +60,10 @@ class Player(ABC):
         self.tracker_idx: int = objective.obj
         self.blocking_update = False
         self._pending_hb = None
+
+        # 'front_sup_85_trim20' -> exchange='front_sup_85', exchange_trim=0.20
+        self.exchange, self.exchange_trim = self._parse_exchange(exchange)
+        self.own_best: float = np.inf  # best value of the player's own criterion seen so far
 
         self._step_errors: int = 0  # consecutive failed step() calls
         self.max_step_errors: int = 10  # after that many in a row the player loop ends
@@ -74,6 +78,31 @@ class Player(ABC):
         self._t_dispatch: Optional[float] = None
         self._update_latency: float = 0.0   # suma czasu od wysłania paczki do wykrycia jej obsłużenia
 
+
+    @staticmethod
+    def _parse_exchange(exchange: str) -> Tuple[str, float]:
+        """Strips the 'trimK' token (K in 0..99) from the exchange string; returns (exchange, K/100)."""
+        trim, tokens = 0.0, []
+        for t in str(exchange).split('_'):
+            if t.startswith('trim') and t[4:].isdigit():
+                k = int(t[4:])
+                if not 0 <= k < 100:
+                    raise ValueError(f"exchange: trim must be in 0..99, got {k}")
+                trim = k / 100.0
+            else:
+                tokens.append(t)
+        return '_'.join(tokens), trim
+
+    @staticmethod
+    def _trim_front(front: np.ndarray, front_eval: np.ndarray, obj_idx: int, own_best: float,
+                    trim: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Removes ceil(trim * |front|) front members closest to own_best in the player's criterion
+        (at least one member is always kept). Used before exchange / suppression."""
+        if trim <= 0 or len(front) < 2 or not np.isfinite(own_best):
+            return front, front_eval
+        n_rm = min(int(np.ceil(trim * len(front))), len(front) - 1)
+        keep = np.argsort(np.abs(front_eval[:, obj_idx] - own_best), kind='stable')[n_rm:]
+        return front[keep], front_eval[keep]
 
 
     def get_identity(self) -> Tuple[int, int]:
@@ -153,6 +182,8 @@ class Player(ABC):
         pop_eval = self.objective.evaluate(pop)
         self.evaluation_counter += pop.shape[0]
 
+        self.own_best = float(np.min(pop_eval))
+
         if self.verbose:
             logger.info(f"Player {self.num} evaluated the initial population.")
 
@@ -191,6 +222,7 @@ class Player(ABC):
                     # Local fitness values were computed in the previous environment
                     pop_eval = self.objective.evaluate(pop)
                     self.evaluation_counter += pop.shape[0]
+                    self.own_best = float(np.min(pop_eval))  # old record belongs to the old environment
                     self.on_environment_change(pop, pop_eval)
 
 
@@ -228,6 +260,8 @@ class Player(ABC):
                                 raise  # loop ends -> AGAMOO detects it (players_running)
                         else:
                             self._step_errors = 0
+                            self.own_best = min(self.own_best, float(np.min(pop_eval)))
+
 
                     self.iteration += 1
                     delta_iter += 1
@@ -304,6 +338,9 @@ class Player(ABC):
                     exchange_iter = global_state['exchange_iter']
 
                     if (self.iteration % exchange_iter == 0) and (self.exchange != 'none'):
+                        # Drop the part of the front closest to the player's own record in its criterion
+                        # (the player's own extreme) before exchange / suppression picks donors from it.
+                        front, front_eval = self._trim_front(front, front_eval, obj_idx, self.own_best, self.exchange_trim)
                         modified_mask = np.zeros(pop.shape[0], dtype=bool)
                         known_mask = np.zeros(pop.shape[0], dtype=bool)
                         reuse = global_state.get('reuse_front_eval', False)
@@ -495,6 +532,9 @@ class Player(ABC):
                             pop[to_eval] = repaired_subset
                             pop_eval[to_eval] = self.objective.evaluate(repaired_subset)
                             self.evaluation_counter += int(np.sum(to_eval))
+
+                        if np.any(modified_mask):
+                            self.own_best = min(self.own_best, float(np.min(pop_eval)))
 
                         #if self.exchange != 'none':
                         #    pop = self.repair.do(pop)
