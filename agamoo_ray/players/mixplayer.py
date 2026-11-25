@@ -282,6 +282,11 @@ class MixPlayer(Player):
         for sub in self.subs:
             sub.on_environment_change(pop, pop_eval)
 
+    def on_exchange(self, pop: np.ndarray, pop_eval: np.ndarray, modified_mask: np.ndarray) -> None:
+        # Only the active sub-player holds live search state (e.g. PSO pbest); a phase that
+        # starts later initialises its state from the current population anyway.
+        self.subs[self._phase_idx].on_exchange(pop, pop_eval, modified_mask)
+
     # ------------------------------------------------------------------ introspection
 
     def get_mix_info(self) -> Dict[str, Any]:

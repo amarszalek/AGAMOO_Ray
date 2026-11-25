@@ -535,6 +535,7 @@ class Player(ABC):
 
                         if np.any(modified_mask):
                             self.own_best = min(self.own_best, float(np.min(pop_eval)))
+                            self.on_exchange(pop, pop_eval, modified_mask)
 
                         #if self.exchange != 'none':
                         #    pop = self.repair.do(pop)
@@ -587,6 +588,11 @@ class Player(ABC):
     def on_environment_change(self, pop: np.ndarray, pop_eval: np.ndarray) -> None:
         """Hook for players keeping fitness-dependent state across steps (e.g. PSO pbest).
         Called after the population has been re-evaluated in the new environment."""
+        pass
+
+    def on_exchange(self, pop: np.ndarray, pop_eval: np.ndarray, modified_mask: np.ndarray) -> None:
+        """Hook called after an exchange, once the changed individuals have been evaluated.
+        modified_mask marks the individuals replaced or changed by the exchange."""
         pass
 
     def evaluate(self, pop: np.ndarray) -> np.ndarray:

@@ -49,6 +49,10 @@ class PSO(Player):
         self.dim = objective.n_var
         self.guide: str = player_param.get('guide', 'global')  # 'global' | 'local'
         self.k_guide: int = player_param.get('k_guide', 5)
+        # After an exchange, the personal best of every replaced particle is set to its new
+        # (archive) position; velocities are kept, so a particle that is its own local guide
+        # does not freeze (which is what made the earlier reset with zeroed velocity fail).
+        self.reset_pbest: bool = bool(player_param.get('reset_pbest', False))
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
@@ -162,4 +166,10 @@ class PSO(Player):
         if self.pbest_pos is not None:
             self.pbest_pos = pop.copy()
             self.pbest_eval = pop_eval.copy()
+
+    def on_exchange(self, pop: np.ndarray, pop_eval: np.ndarray, modified_mask: np.ndarray) -> None:
+        if not self.reset_pbest or self.pbest_pos is None:
+            return  # disabled, or swarm not initialised yet (first step builds pbest from pop)
+        self.pbest_pos[modified_mask] = pop[modified_mask]
+        self.pbest_eval[modified_mask] = pop_eval[modified_mask]
 
