@@ -50,6 +50,16 @@ class ClonalSelection(Player):
         self.mutate_args: Tuple[float, ...] = tuple(player_param.get('mutate_args', [0.15, 0.85, 0.005]))
         self.sup: float = player_param.get('sup', 0.0)
         self.strategy: str = player_param.get('strategy', 'base')
+        # Starzenie przeciwciał i adaptacyjna sigma (tylko strategy='base'):
+        #   age_max     - po tylu krokach bez ścisłej poprawy przeciwciało nie dostaje klonów i jest
+        #                 zastępowane krzyżówką arytmetyczną dwóch punktów archiwum (na pattern); 0 = wyłączone,
+        #   sigma_adapt - indywidualna sigma mutacji gaussowskiej: x1.5 po poprawie, x0.9^0.25 po porażce.
+        self.age_max: int = int(player_param.get('age_max', 0))
+        self.sigma_adapt: bool = bool(player_param.get('sigma_adapt', False))
+        self.sigma_min: float = float(player_param.get('sigma_min', 1e-4))
+        self.sigma_max: float = float(player_param.get('sigma_max', 0.2))
+        self.ages: Optional[np.ndarray] = None
+        self.sigmas: Optional[np.ndarray] = None
         self.create: str = player_param.get('create', 'lhs')
         self.seed  = player_param.get('seed', None)
         if self.seed is not None:
@@ -81,6 +91,10 @@ class ClonalSelection(Player):
         """
         temp_pop = deepcopy(pop)
         temp_pop_eval = deepcopy(pop_eval)
+
+        if self.ages is None or self.ages.shape[0] != pop.shape[0]:
+            self.ages = np.zeros(pop.shape[0], dtype=int)
+            self.sigmas = np.full(pop.shape[0], float(self.mutate_args[2]))
 
         # BEZPIECZNA ITERACJA: Pobieramy aktualną iterację z globalnego licznika dla tego gracza
         current_iter = 0
@@ -134,22 +148,27 @@ class ClonalSelection(Player):
         else:
             # 'base' strategy: Tournament between a single parent and its own clones
             for rank, arg in enumerate(arg_sort):
+                if self.age_max > 0 and self.ages[arg] >= self.age_max:
+                    continue  # stare przeciwciało: bez klonów, odświeżane niżej z archiwum
                 clone_num = max(int(self.nclone / (rank + 1) + 0.5), 1)
                 norm_rank = rank / max(1, len(arg_sort) - 1)
+                sigma = self.sigmas[arg] if self.sigma_adapt else None
 
-                clones = np.array([self._mutate(temp_pop[arg], pattern, norm_rank) for _ in range(clone_num)])
+                clones = np.array([self._mutate(temp_pop[arg], pattern, norm_rank, sigma) for _ in range(clone_num)])
                 clones = clones[np.any(clones != temp_pop[arg], axis=1)]
 
+                improved = False
                 if clones.shape[0] > 0:
                     clones = self.repair.do(clones)
                     clones_eval = self.objective.evaluate(clones)
                     evaluation_counter += clones.shape[0]
-                    # Find the best clone among the generated batch
                     argmin = clones_eval.argmin()
                     if clones_eval[argmin] < temp_pop_eval[arg]:
+                        improved = True
                         indices.append(arg)
                         better.append(clones[argmin])
                         better_eval.append(clones_eval[argmin])
+                self._update_age_sigma(arg, improved)
 
             if len(better) > 0:
                 temp_pop[indices] = np.stack(better)
@@ -157,8 +176,10 @@ class ClonalSelection(Player):
 
         # Receptor Editing (Suppression): Replace worst individuals with random new ones
         d = int(pop.shape[0] * self.sup)
-        if d > 0:
-            inds = temp_pop_eval.argsort()[-d:]
+        inds = temp_pop_eval.argsort()[-d:] if d > 0 else np.zeros(0, dtype=int)
+        if self.age_max > 0 and self.strategy != 'all_best':
+            inds = np.union1d(inds, np.flatnonzero(self.ages >= self.age_max)).astype(int)
+        if inds.shape[0] > 0:
             pop_sup = np.zeros((inds.shape[0], self.objective.n_var))
             for i in range(inds.shape[0]):
                 # Zamiast 'uniform_mutate', używamy inteligentnego krzyżowania osobników z Frontu
@@ -186,12 +207,38 @@ class ClonalSelection(Player):
 
             temp_pop[inds, :] = pop_sup[:, :]
             temp_pop_eval[inds] = pop_eval_sup[:]
+            self.ages[inds] = 0
+            self.sigmas[inds] = float(self.mutate_args[2])
 
         return temp_pop, temp_pop_eval, evaluation_counter
 
-    def _mutate(self, ind: np.ndarray, pattern: np.ndarray, norm_rank: float) -> np.ndarray:
+    def _update_age_sigma(self, arg: int, improved: bool) -> None:
+        if improved:
+            self.ages[arg] = 0
+            if self.sigma_adapt:
+                self.sigmas[arg] = min(self.sigmas[arg] * 1.5, self.sigma_max)
+        else:
+            self.ages[arg] += 1
+            if self.sigma_adapt:
+                bump = 1.5 if self.ages[arg] % 5 == 4 else 1.0  # okresowe "otrząśnięcie" z zawężenia
+                self.sigmas[arg] = float(np.clip(self.sigmas[arg] * 0.9 ** 0.25 * bump, self.sigma_min, self.sigma_max))
+
+    def on_exchange(self, pop: np.ndarray, pop_eval: np.ndarray, modified_mask: np.ndarray) -> None:
+        if self.ages is not None:
+            self.ages[modified_mask] = 0
+            self.sigmas[modified_mask] = float(self.mutate_args[2])
+
+    def on_environment_change(self, pop: np.ndarray, pop_eval: np.ndarray) -> None:
+        if self.ages is not None:
+            self.ages[:] = 0
+            self.sigmas[:] = float(self.mutate_args[2])
+
+    def _mutate(self, ind: np.ndarray, pattern: np.ndarray, norm_rank: float,
+                sigma_override: Optional[float] = None) -> np.ndarray:
         """Applies hypermutation operators based on defined probabilities."""
         a, b, sigma = self.mutate_args
+        if sigma_override is not None:
+            sigma = sigma_override
         r = np.random.random()
 
         if r < a:

@@ -11,6 +11,7 @@ from agamoo_ray.utils import get_not_dominated, front_suppression, adaptive_eta_
 from agamoo_ray.utils import assigning_gens, adaptive_linear_assigning_gens, adaptive_shap_assigning_gens, adaptive_sparsity_gens
 from typing import List, Dict, Any, Optional, Callable, Union
 from scipy.spatial.distance import cdist
+from agamoo_ray.tradeoff import TradeoffClassifier
 
 
 logger = logging.getLogger(__name__)
@@ -564,6 +565,12 @@ class GlobalStorage:
 
         # Initialize variable patterns (genes)
         self.patterns = assigning_gens(self.nvars, self.num_trackers)
+        # assign_gens = 'conv_div' (p_div = 0.2) lub 'conv_div_<proc>' (np. 'conv_div_30' -> p_div = 0.3)
+        self.tradeoff: Optional[TradeoffClassifier] = None
+        if str(self.assign_gens).startswith('conv_div'):
+            se = str(self.assign_gens).split('_')
+            p_div = int(se[2]) / 100 if len(se) == 3 and se[2].isdigit() else 0.2
+            self.tradeoff = TradeoffClassifier(self.nvars, p_div=p_div)
         self.total_evaluations = 0
 
         self._refresh_snapshot_ref()
@@ -628,6 +635,8 @@ class GlobalStorage:
         """From now on only payloads computed in `env_version` are merged into the archive."""
         self.current_env_version = env_version
         self.current_env_params = dict(env_params)
+        if self.tradeoff is not None:
+            self.tradeoff.reset()
 
     def publish_environment(self) -> None:
         """Makes the accepted environment visible to players through the snapshot."""
@@ -701,6 +710,11 @@ class GlobalStorage:
                 elif self.assign_gens == 'adaptive_eta':
                     self.patterns = adaptive_eta_assigning_gens(self.front, target_front_eval, self.nvars,
                                                                 self.num_trackers)
+                elif self.tradeoff is not None:
+                    # prawdziwe kryteria (front_eval), NIE target_front_eval - bliźniaki obj_map
+                    # podwajałyby wagę kryterium w udziałach
+                    self.tradeoff.update(self.front, self.front_eval)
+                    self.patterns = self.tradeoff.patterns(self.num_trackers)
                 else:
                     raise ValueError(f"Unknown assign_gens strategy: {self.assign_gens}")
 

@@ -56,6 +56,17 @@ class PSO(Player):
         #   'zero_v' - pbest := new position and velocity := 0 (full restart of the particle).
         # bool values are accepted for backward compatibility: True -> 'keep_v', False -> 'none'.
         self.reset_pbest: str = self._parse_reset_pbest(player_param.get('reset_pbest', 'none'))
+        # Mutacja wielomianowa (Deb) po ruchu roju, tylko na zmiennych z pattern.
+        #   mutation_rate - odsetek cząstek mutowanych w kroku (0.0 = wyłączona, zachowanie jak dotąd),
+        #   eta_m         - indeks rozkładu (większy = mniejsze skoki); w wybranej cząstce każda
+        #                   zmienna z pattern mutuje z prawdop. 1/|pattern| (co najmniej jedna).
+        # Prędkości i pbest bez zmian: pbest przyjmie skok tylko przy poprawie.
+        self.mutation_rate: float = float(player_param.get('mutation_rate', 0.0))
+        self.eta_m: float = float(player_param.get('eta_m', 20.0))
+        if not 0.0 <= self.mutation_rate <= 1.0:
+            raise ValueError(f"PSO: mutation_rate must be in [0, 1], got {self.mutation_rate}")
+        if self.eta_m < 0.0:
+            raise ValueError(f"PSO: eta_m must be >= 0, got {self.eta_m}")
 
         if self.seed is not None:
             np.random.seed(self.seed + num)
@@ -137,6 +148,9 @@ class PSO(Player):
         # Zabezpieczenie ograniczeń przestrzeni
         new_pop = np.clip(new_pop, a, b)
 
+        if self.mutation_rate > 0.0:
+            new_pop = self._polynomial_mutation(new_pop, pattern, a, b)
+
         # Naprawa i Ewaluacja (Batching)
         #new_pop = self.repair.do(new_pop)
         if hasattr(self.repair, 'order'):
@@ -169,6 +183,28 @@ class PSO(Player):
         if self.pbest_pos is not None:
             self.pbest_pos = pop.copy()
             self.pbest_eval = pop_eval.copy()
+
+    def _polynomial_mutation(self, pop: np.ndarray, pattern: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        idx = np.flatnonzero(pattern)
+        if idx.size == 0:
+            return pop
+        rows = np.flatnonzero(np.random.rand(pop.shape[0]) < self.mutation_rate)
+        if rows.size == 0:
+            return pop
+        mask = np.random.rand(rows.size, idx.size) < 1.0 / idx.size
+        none = ~mask.any(axis=1)
+        mask[none, np.random.randint(idx.size, size=int(none.sum()))] = True   # co najmniej jedna zmienna
+
+        sub = pop[np.ix_(rows, idx)]
+        lo, span = a[idx], b[idx] - a[idx]
+        u = np.random.rand(*sub.shape)
+        e = 1.0 / (self.eta_m + 1.0)
+        delta = np.where(u < 0.5, (2.0 * u) ** e - 1.0, 1.0 - (2.0 * (1.0 - u)) ** e)
+        sub = np.where(mask, np.clip(sub + delta * span, lo, lo + span), sub)
+
+        out = pop.copy()
+        out[np.ix_(rows, idx)] = sub
+        return out
 
     @staticmethod
     def _parse_reset_pbest(value: Any) -> str:
